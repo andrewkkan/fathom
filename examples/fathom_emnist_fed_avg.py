@@ -44,6 +44,8 @@ FLAGS = flags.FLAGS
 flags.DEFINE_float(
     'eta_h', 0.0001, 'Meta-learning rate')
 
+flags.DEFINE_float(
+    'num_steps', 100, 'Number of Initial Local Steps (> 0)')
 
 def main(_):
     # We only use TensorFlow for datasets, so we restrict it to CPU only to avoid
@@ -75,7 +77,11 @@ def main(_):
             learning_rate=10**(-2.5), b1=0.9, b2=0.999, eps=10**(-4))
     hyper_optimizer = fedjax.optimizers.adam(learning_rate=FLAGS.eta_h)
     # Hyperparameters for client local traing dataset preparation.
-    client_batch_hparams = fedjax.ShuffleRepeatBatchHParams(batch_size=20, seed=jax.random.PRNGKey(17))
+    client_batch_hparams = fedjax.ShuffleRepeatBatchHParams(
+        batch_size=20, 
+        num_steps=FLAGS.num_steps, 
+        seed=jax.random.PRNGKey(17),
+    )
     algorithm = fathom_fedavg.federated_averaging(
         grad_fn, 
         client_optimizer,
