@@ -31,6 +31,7 @@ from absl import flags
 import fedjax
 import fathom
 from fathom.algorithms import fathom_fedavg
+from fathom.algorithms.fathom_fedavg import Hyperparams
 
 import jax
 import jax.numpy as jnp
@@ -42,10 +43,20 @@ import optax
 FLAGS = flags.FLAGS
 
 flags.DEFINE_float(
-    'eta_h', 0.0001, 'Meta-learning rate')
+    'eta_hyper', 0.001, 'Meta-learning rate')
+
+flags.DEFINE_integer(
+    'num_steps', 100, 'Init number of Local Steps (> 0)')
 
 flags.DEFINE_float(
-    'num_steps', 100, 'Number of Initial Local Steps (> 0)')
+    'eta_c', 10**(-1.5), 'Init Client Learning Rate')
+
+flags.DEFINE_integer(
+    'batch_size', 20, 'Init Local Batch Size')
+
+flags.DEFINE_float(
+    'alpha', 0.9, 'Momentum for global gradient estimate')
+
 
 def main(_):
     # We only use TensorFlow for datasets, so we restrict it to CPU only to avoid
@@ -72,15 +83,28 @@ def main(_):
     grad_fn = jax.jit(jax.grad(loss))
 
     # Create federated averaging algorithm.
-    client_optimizer = fathom.optimizers.sgd(learning_rate=10**(-1.5))
-    server_optimizer = fedjax.optimizers.adam(
-            learning_rate=10**(-2.5), b1=0.9, b2=0.999, eps=10**(-4))
-    hyper_optimizer = fedjax.optimizers.adam(learning_rate=FLAGS.eta_h)
+    client_optimizer = fathom.optimizers.sgd(learning_rate=FLAGS.eta_c)
+    # server_optimizer = fedjax.optimizers.adam(
+    #         learning_rate=10**(-2.5), b1=0.9, b2=0.999, eps=10**(-4))
+    server_optimizer = fedjax.optimizers.sgd(learning_rate=1.0) # Fed Avg 
+    hyper_optimizer = fedjax.optimizers.adam(learning_rate=FLAGS.eta_hyper)
     # Hyperparameters for client local traing dataset preparation.
     client_batch_hparams = fedjax.ShuffleRepeatBatchHParams(
-        batch_size=20, 
+        batch_size=FLAGS.batch_size, 
         num_steps=FLAGS.num_steps, 
         seed=jax.random.PRNGKey(17),
+    )
+    # eta_hyper: Hyperparams = Hyperparams(
+    #     eta_c = FLAGS.eta_he, 
+    #     tau = FLAGS.eta_ht,
+    #     alpha = 0.0, # Static hyper
+    #     bs = 0.0, # Static hyper
+    # )
+    server_init_hparams: Hyperparams = Hyperparams(
+        eta_c = FLAGS.eta_c,
+        tau = float(FLAGS.num_steps),
+        alpha = FLAGS.alpha,
+        bs = float(FLAGS.batch_size),
     )
     algorithm = fathom_fedavg.federated_averaging(
         grad_fn, 
@@ -88,6 +112,8 @@ def main(_):
         server_optimizer,
         hyper_optimizer,
         client_batch_hparams,
+        # eta_hyper,
+        server_init_hparams,
     )
 
     # Initialize model parameters and algorithm server state.
@@ -133,7 +159,7 @@ def main(_):
                 server_state.params,
                 test_eval_batches
             )
-            print(f'[round {round_num}] train_metrics={train_metrics}, eta_c={server_state.meta_state.eta_c}')
+            print(f'[round {round_num}] train_metrics={train_metrics}, eta_c={jax.nn.sigmoid(server_state.meta_state.hyperparams.eta_c)}')
             print(f'[round {round_num}] test_metrics={test_metrics}')
 
     # Save final trained model parameters to file.
