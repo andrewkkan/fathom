@@ -37,9 +37,11 @@ from fedjax.core import federated_data
 from fedjax.core import for_each_client
 from fedjax.core import optimizers
 from fedjax.core import tree_util
+from fedjax.core import models
 from fedjax.core.typing import BatchExample
 from fedjax.core.typing import Params
 from fedjax.core.typing import PRNGKey
+from fedjax.core.typing import OptState, BatchExample
 
 import jax
 import jax.numpy as jnp
@@ -84,6 +86,36 @@ def create_train_for_each_client(grad_fn, client_optimizer):
     return for_each_client.for_each_client(client_init, client_step, client_final)
 
 
+#@jax.jit 
+def autoLip(
+    data_dim: Mapping[str, Tuple[int]],
+    params: Params, 
+    model: models.Model,
+) -> float:
+    '''
+    Based on AutoLip (Algo 2) from "Lipschitz regularity of deep neural networks", arxiv:1805.10965.
+    '''
+    kn = jax.random.PRNGKey(17)
+    xdl, ydl = list(data_dim['x']), list(data_dim['y'])
+    xdl.insert(0,1) # 1 for single example in type BatchExample
+    ydl.insert(0,1) # 1 for single example in type BatchExample
+    single_example_x_dim = tuple(xdl)
+    single_example_y_dim = tuple(ydl)
+    vl = jax.random.normal(key=kn, shape=single_example_x_dim)
+    v0 = jnp.zeros(shape=single_example_x_dim)
+    batch_0: BatchExample = dict(x=v0, y=None)
+    def loss(v: jnp.ndarray): # Really only need SingleExample but it needs to type-match loss_fn
+        batch_v: BatchExample = dict(x=v, y=None)
+        norm = jnp.linalg.norm(model.apply_for_eval(params, batch_v) - model.apply_for_eval(params, batch_0))
+        return 0.5 * jnp.square(norm)
+    grad_fn = jax.jit(jax.grad(loss))
+    for idx in range(100):
+        vl = grad_fn(vl)
+        vl = vl / jnp.linalg.norm(vl)
+    batch_vl: BatchExample = dict(x=vl, y=None)
+    return jnp.linalg.norm(model.apply_for_eval(params, batch_vl) - model.apply_for_eval(params, batch_0))
+
+
 @dataclasses.dataclass
 class Hyperparams:
     eta_c: float    # Local learning rate or step size
@@ -121,6 +153,8 @@ def federated_averaging(
         client_batch_hparams: client_datasets.ShuffleRepeatBatchHParams,
         # eta_hyper: Hyperparams,  # Learning rates.  For statically set hyperparams, set learning rates to 0.
         server_init_hparams: Hyperparams,
+        model: models.Model,
+        data_dim: Mapping[str, Tuple[int]],
 ) -> federated_algorithm.FederatedAlgorithm:
     """Builds federated averaging.
 
@@ -171,7 +205,7 @@ def federated_averaging(
         ]],
     ) -> Tuple[ServerState, Mapping[federated_data.ClientId, Any]]:
         client_num_examples = {cid: len(cds) for cid, cds, _ in clients}
-        current_client_batch_hparams = client_datasets.ShuffleRepeatBatchHParams(
+        client_batch_hparams_adaptive = client_datasets.ShuffleRepeatBatchHParams(
             batch_size = int(jax.nn.relu(server_state.meta_state.hyperparams.bs)+1.5), # In practice this is pushed to clients
             num_steps = int(jax.nn.relu(server_state.meta_state.hyperparams.tau)+1.5), # In practice this is pushed to clients 
             num_epochs = client_batch_hparams.num_epochs,
@@ -179,7 +213,7 @@ def federated_averaging(
             seed = client_batch_hparams.seed,
             skip_shuffle = client_batch_hparams.skip_shuffle,
         )
-        batch_clients = [(cid, cds.shuffle_repeat_batch(current_client_batch_hparams), crng)
+        batch_clients = [(cid, cds.shuffle_repeat_batch(client_batch_hparams_adaptive), crng)
                                          for cid, cds, crng in clients]
         shared_input = {'params': server_state.params, 'eta_c': jax.nn.sigmoid(server_state.meta_state.hyperparams.eta_c)}
         client_diagnostics = {}
@@ -217,11 +251,8 @@ def federated_averaging(
             server_state.meta_state.grad_glob,
             gradsum_inst,
         )
-        hyper_optate, hyperparams = hyper_optimizer.apply(
-            hyper_step(server_state, gradsum_inst, grad_glob), 
-            server_state.meta_state.opt_state, 
-            server_state.meta_state.hyperparams,
-        )
+        lipschitz_ub = autoLip(data_dim, params, model)
+        hyper_optate, hyperparams = hyper_update(server_state, gradsum_inst, grad_glob, lipschitz_ub)
         meta_state = MetaState(
             grad_glob = grad_glob, 
             hyperparams = hyperparams,
@@ -229,11 +260,12 @@ def federated_averaging(
         )
         return ServerState(params, opt_state, server_state.round_index + 1, meta_state)
 
-    def hyper_step(
+    def hyper_update(
         server_state: ServerState,
         gradsum_inst: Params,
         grad_glob: Params,
-    ) -> Hyperparams:
+        lipschitz_ub: float,
+    ) -> Tuple[OptState, Hyperparams]:
 
         sigmoid_prime = jax.grad(jax.nn.sigmoid)(server_state.meta_state.hyperparams.eta_c)
         cossim = jax.tree_util.tree_multimap(lambda a, b: a * -b, grad_glob, gradsum_inst)
@@ -244,7 +276,14 @@ def federated_averaging(
         relu_prime = jax.grad(jax.nn.relu)(server_state.meta_state.hyperparams.tau)
         tau_step = relu_prime * 0.0 
 
+        # There should only be 1 non-zero step depending on the Phase
         hyper_step = Hyperparams(eta_c = eta_c_step, tau = tau_step, alpha = 0.0, bs = 0.0)
-        return hyper_step
+
+        print(f"LUB: {lipschitz_ub}")
+        return hyper_optimizer.apply(
+            hyper_step,
+            server_state.meta_state.opt_state,
+            server_state.meta_state.hyperparams,
+        )
 
     return federated_algorithm.FederatedAlgorithm(init, apply)

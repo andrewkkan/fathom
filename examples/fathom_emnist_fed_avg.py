@@ -15,9 +15,7 @@
 
 - The model is a CNN with dropout
 - The client optimizer is SGD
-- The server optimizer is Adam.
 
-Hyperparameters match those used in https://arxiv.org/abs/2003.00295.
 """
 
 # Remove the following 2 lines after fathom becomes an installable package
@@ -29,6 +27,8 @@ from absl import app
 from absl import flags
 
 import fedjax
+from fedjax.core import models
+
 import fathom
 from fathom.algorithms import fathom_fedavg
 from fathom.algorithms.fathom_fedavg import Hyperparams
@@ -68,7 +68,7 @@ def main(_):
     train_fd, test_fd = fedjax.datasets.emnist.load_data(only_digits=False)
 
     # Create CNN model with dropout.
-    model = fedjax.models.emnist.create_conv_model(only_digits=False)
+    model: models.Model = fedjax.models.emnist.create_conv_model(only_digits=False)
 
     # Scalar loss function with model parameters, batch of examples, and seed
     # PRNGKey as input.
@@ -77,7 +77,8 @@ def main(_):
         preds = model.apply_for_train(params, batch, rng)
         # Per example loss of shape [batch_size].
         example_loss = model.train_loss(batch, preds)
-        return jnp.mean(example_loss)
+        # reg_loss = jnp.square(fedjax.tree_util.tree_l2_norm(params))
+        return jnp.mean(example_loss) # + 0.05 * reg_loss
 
     # Gradient function of `loss` w.r.t. to model `params` (jitted for speed).
     grad_fn = jax.jit(jax.grad(loss))
@@ -106,14 +107,21 @@ def main(_):
         alpha = FLAGS.alpha,
         bs = float(FLAGS.batch_size),
     )
+    data_dim = dict(
+        # Dim for single sample
+        # There must be a better way to extract these values....
+        x=test_fd.get_client(next(test_fd.client_ids())).all_examples()['x'][0].shape,
+        y=test_fd.get_client(next(test_fd.client_ids())).all_examples()['y'][0].shape,
+    )
     algorithm = fathom_fedavg.federated_averaging(
         grad_fn, 
         client_optimizer,
         server_optimizer,
         hyper_optimizer,
         client_batch_hparams,
-        # eta_hyper,
         server_init_hparams,
+        model,
+        data_dim,
     )
 
     # Initialize model parameters and algorithm server state.
