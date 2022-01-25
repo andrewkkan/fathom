@@ -39,7 +39,7 @@ from fedjax.core import optimizers
 from fedjax.core import tree_util
 from fedjax.core import models
 from fedjax.core.typing import BatchExample
-from fedjax.core.typing import Params
+from fedjax.core.typing import Params, PyTree
 from fedjax.core.typing import PRNGKey
 from fedjax.core.typing import OptState, BatchExample
 
@@ -52,19 +52,22 @@ Grads = Params
 def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.Optimizer, model: models.Model):
     """Builds client_init, client_step, client_final for for_each_client."""
 
-    def sigma2_from_subbatch(
+    def sigma2_from_subsamples(
         client_step_state: Mapping[str, Any], grad_opt: Params,
         batch: BatchExample, sb_size: int, 
         use_rng: PRNGKey, metrics_rng: PRNGKey, 
     ) -> Tuple[jnp.ndarray, PRNGKey]:
-        subbatch_rng, metrics_rng = jax.random.split(metrics_rng)
-        subbatch = jax.tree_util.tree_map(lambda b: jax.random.choice(key=subbatch_rng, a=b, shape=[sb_size,], replace=False), batch)
+        subsamples_rng, metrics_rng = jax.random.split(metrics_rng)
+        subsamples = jax.tree_util.tree_map(lambda b: jax.random.choice(key=subsamples_rng, a=b, shape=[sb_size,], replace=False), batch)
         sigma2 = jnp.array(0.)
         for sigma_idx in range(sb_size):
-            subbatch_sample = jax.tree_util.tree_map(lambda a: a[sigma_idx:sigma_idx+1], subbatch)
-            grad_sigma = grad_fn(client_step_state['params'], subbatch_sample, use_rng)
-            grad_delta = jax.tree_util.tree_multimap(lambda a, b: a - b, grad_opt, grad_sigma)
-            sigma2 = sigma2 + jnp.square(tree_util.tree_l2_norm(grad_delta)) / jnp.array(sb_size)    
+            sample = jax.tree_util.tree_map(lambda a: a[sigma_idx:sigma_idx+1], subsamples)
+            grad_sigma2 = grad_fn(client_step_state['params'], sample, use_rng)
+            grad_delta = jax.tree_util.tree_multimap(lambda a, b: a - b, grad_opt, grad_sigma2)
+            sigma2 = sigma2 + jnp.square(tree_util.tree_l2_norm(grad_delta)) / jnp.array(float(sb_size))
+        # The loop ends with sigma2 (noisy version) based on single samples.  Let's scale it to reflect sigma2 per batch.
+        batch_size = batch['x'].shape[0] 
+        sigma2 = sigma2 / jnp.array(float(batch_size))
         return sigma2, metrics_rng
 
     def eval_loss(params, batch):
@@ -83,6 +86,7 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
             'rng': client_rng,
             'params0': tree_util.tree_weight(shared_input['params'], 1.0), # Any better way to copy a tree?
             'eval0_loss': jnp.array(0.),
+            'sigma2': jnp.array(0.),
             'tau': shared_input['tau'],
         }
         return client_step_state
@@ -90,7 +94,7 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
     def client_step(client_step_state, batch):
         rng, use_rng, metrics_rng = jax.random.split(client_step_state['rng'], num=3)
         grad_opt = grad_fn(client_step_state['params'], batch, use_rng)
-        sigma2, metrics_rng = sigma2_from_subbatch(
+        sigma2, metrics_rng = sigma2_from_subsamples(
             client_step_state=client_step_state, grad_opt=grad_opt, 
             batch=batch, sb_size=3, 
             use_rng=use_rng, metrics_rng=metrics_rng,
@@ -102,6 +106,7 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
             'rng': rng,
             'params0': client_step_state['params0'],
             'eval0_loss': client_step_state['eval0_loss'] + eval_loss(client_step_state['params0'], batch) / jnp.array(client_step_state['tau']),
+            'sigma2': client_step_state['sigma2'] + sigma2 / jnp.array(client_step_state['tau']),
             'tau': client_step_state['tau'],
         }
         return next_client_step_state
@@ -110,7 +115,7 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
         delta_params = jax.tree_util.tree_multimap(lambda a, b: a - b,
                                                    shared_input['params'],
                                                    client_step_state['params'])
-        return delta_params, client_step_state['eval0_loss']
+        return delta_params, client_step_state['eval0_loss'], client_step_state['sigma2']
 
     return for_each_client.for_each_client(client_init, client_step, client_final)
 
@@ -173,6 +178,8 @@ class ServerState:
     round_index: int
     meta_state: MetaState
     eval0_loss: float
+    mean_sigma2: float
+    mean_zeta2: float
 
 
 def federated_averaging(
@@ -225,6 +232,8 @@ def federated_averaging(
             round_index = 1, 
             meta_state = meta_state,
             eval0_loss = 0.0,
+            mean_sigma2 = 0.0,
+            mean_zeta2 = 0.0,
         )
 
     def apply(
@@ -254,14 +263,18 @@ def federated_averaging(
         # loading all the client outputs into memory since they can be prohibitively
         # large depending on the model parameters size.
         delta_params_sum = tree_util.tree_zeros_like(server_state.params)
+        delta_params_seq: PyTree = []
         eval0_loss_sum = jnp.array(0.)
+        sigma2_sum = jnp.array(0.)
         num_examples_sum = 0.
-        for client_id, (delta_params, eval0_loss) in train_for_each_client(shared_input, batch_clients):
-            # num_examples = client_num_examples[client_id]
-            num_examples = tau * bs
+        for client_id, (delta_params, eval0_loss, sigma2) in train_for_each_client(shared_input, batch_clients):
+            # Server collecting stats before sending them to server_update for updating params and metrics.
+            num_examples = tau * bs  # used to be num_examples = client_num_examples[client_id]
             delta_params_sum = tree_util.tree_add(
                 delta_params_sum, tree_util.tree_weight(delta_params, num_examples))
+            delta_params_seq.append(delta_params) 
             eval0_loss_sum = eval0_loss_sum + eval0_loss * jnp.array(num_examples)
+            sigma2_sum = sigma2_sum + sigma2 * jnp.array(num_examples)
             num_examples_sum += num_examples
             # We record the l2 norm of client updates as an example, but it is not
             # required for the algorithm.
@@ -270,10 +283,17 @@ def federated_averaging(
             }
         mean_delta_params = tree_util.tree_inverse_weight(delta_params_sum, num_examples_sum)
         mean_eval0_loss = eval0_loss_sum / jnp.array(num_examples_sum)
-        server_state = server_update(server_state, mean_delta_params, mean_eval0_loss)
+        mean_sigma2 = sigma2_sum / jnp.array(num_examples_sum)
+        zeta2_sum = jnp.array(0.)
+        for dp in delta_params_seq:
+            zeta2_sum = jnp.square(tree_util.tree_l2_norm(
+                jax.tree_util.tree_multimap(jnp.subtract, dp, mean_delta_params)
+            )) / jnp.array(shared_input['eta_c']) * num_examples 
+        mean_zeta2 = zeta2_sum / jnp.array(num_examples_sum)
+        server_state = server_update(server_state, mean_delta_params, mean_eval0_loss, mean_sigma2, mean_zeta2)
         return server_state, client_diagnostics
 
-    def server_update(server_state, mean_delta_params, mean_eval0_loss):
+    def server_update(server_state, mean_delta_params, mean_eval0_loss, mean_sigma2, mean_zeta2):
         opt_state, params = server_optimizer.apply(
             mean_delta_params, 
             server_state.opt_state, 
@@ -295,7 +315,7 @@ def federated_averaging(
             hyperparams = hyperparams,
             opt_state = hyper_optate,
         )
-        return ServerState(params, opt_state, server_state.round_index + 1, meta_state, mean_eval0_loss)
+        return ServerState(params, opt_state, server_state.round_index + 1, meta_state, mean_eval0_loss, mean_sigma2, mean_zeta2)
 
     def hyper_update(
         server_state: ServerState,

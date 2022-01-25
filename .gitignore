@@ -20,3 +20,4 @@ docs/_autosummary
 venv/
 jax.iml
 build/
+.git*
