@@ -63,7 +63,7 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
         for sigma_idx in range(sb_size):
             sample = jax.tree_util.tree_map(lambda a: a[sigma_idx:sigma_idx+1], subsamples)
             grad_sigma2 = grad_fn(client_step_state['params'], sample, use_rng)
-            grad_delta = jax.tree_util.tree_multimap(lambda a, b: a - b, grad_opt, grad_sigma2)
+            grad_delta = jax.tree_util.tree_multimap(jnp.subtract, grad_opt, grad_sigma2)
             sigma2 = sigma2 + jnp.square(tree_util.tree_l2_norm(grad_delta)) / jnp.array(float(sb_size))
         # The loop ends with sigma2 (noisy version) based on single samples.  Let's scale it to reflect sigma2 per batch.
         batch_size = batch['x'].shape[0] 
@@ -112,9 +112,7 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
         return next_client_step_state
 
     def client_final(shared_input, client_step_state) -> Tuple[Params, jnp.ndarray]:
-        delta_params = jax.tree_util.tree_multimap(lambda a, b: a - b,
-                                                   shared_input['params'],
-                                                   client_step_state['params'])
+        delta_params = jax.tree_util.tree_multimap(jnp.subtract, shared_input['params'], client_step_state['params'])
         return delta_params, client_step_state['eval0_loss'], client_step_state['sigma2']
 
     return for_each_client.for_each_client(client_init, client_step, client_final)
@@ -179,7 +177,7 @@ class ServerState:
     meta_state: MetaState
     eval0_loss: float
     mean_sigma2: float
-    mean_zeta2: float
+    mean_victor: float
 
 
 def federated_averaging(
@@ -233,7 +231,7 @@ def federated_averaging(
             meta_state = meta_state,
             eval0_loss = 0.0,
             mean_sigma2 = 0.0,
-            mean_zeta2 = 0.0,
+            mean_victor = 0.0,
         )
 
     def apply(
@@ -281,19 +279,23 @@ def federated_averaging(
             client_diagnostics[client_id] = {
                     'delta_l2_norm': tree_util.tree_l2_norm(delta_params),
             }
+
         mean_delta_params = tree_util.tree_inverse_weight(delta_params_sum, num_examples_sum)
         mean_eval0_loss = eval0_loss_sum / jnp.array(num_examples_sum)
+        # Estimate of noise variance of local stochastic gradients available from a local oracle.
         mean_sigma2 = sigma2_sum / jnp.array(num_examples_sum)
-        zeta2_sum = jnp.array(0.)
+        # Expected value of Vk, as defined in "Local SGD: Unified Theory..." by Gorbunov (arxiv:2011.02828)
+        # See section 2 and Lemma G.4 (81) for details.
+        victor_sum = jnp.array(0.)
         for dp in delta_params_seq:
-            zeta2_sum = jnp.square(tree_util.tree_l2_norm(
-                jax.tree_util.tree_multimap(jnp.subtract, dp, mean_delta_params)
-            )) / jnp.array(shared_input['eta_c']) * num_examples 
-        mean_zeta2 = zeta2_sum / jnp.array(num_examples_sum)
-        server_state = server_update(server_state, mean_delta_params, mean_eval0_loss, mean_sigma2, mean_zeta2)
+            victor_sum = victor_sum + jnp.square(tree_util.tree_l2_norm(
+                jax.tree_util.tree_multimap(jnp.subtract, dp, mean_delta_params), 
+            )) * num_examples 
+        mean_victor = victor_sum / jnp.array(num_examples_sum) 
+        server_state = server_update(server_state, mean_delta_params, mean_eval0_loss, mean_sigma2, mean_victor)
         return server_state, client_diagnostics
 
-    def server_update(server_state, mean_delta_params, mean_eval0_loss, mean_sigma2, mean_zeta2):
+    def server_update(server_state, mean_delta_params, mean_eval0_loss, mean_sigma2, mean_victor):
         opt_state, params = server_optimizer.apply(
             mean_delta_params, 
             server_state.opt_state, 
@@ -315,7 +317,7 @@ def federated_averaging(
             hyperparams = hyperparams,
             opt_state = hyper_optate,
         )
-        return ServerState(params, opt_state, server_state.round_index + 1, meta_state, mean_eval0_loss, mean_sigma2, mean_zeta2)
+        return ServerState(params, opt_state, server_state.round_index + 1, meta_state, mean_eval0_loss, mean_sigma2, mean_victor)
 
     def hyper_update(
         server_state: ServerState,

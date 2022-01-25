@@ -169,7 +169,7 @@ def main(_):
                 server_state.params,
                 test_eval_batches
             )
-            print(f'[round {round_num}] train_metrics={train_metrics}, eta_c={jax.nn.sigmoid(server_state.meta_state.hyperparams.eta_c)}, GlobLoss={server_state.eval0_loss}, Sigma2={server_state.mean_sigma2}, Zeta2={server_state.mean_zeta2}')
+            print(f'[round {round_num}] train_metrics={train_metrics}, eta_c={jax.nn.sigmoid(server_state.meta_state.hyperparams.eta_c)}, GlobLoss={server_state.eval0_loss}, Sigma2={server_state.mean_sigma2}, Victor={server_state.mean_victor}')
             print(f'[round {round_num}] test_metrics={test_metrics}')
 
     # Save final trained model parameters to file.
