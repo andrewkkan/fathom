@@ -20,7 +20,7 @@
 
 # Remove the following 2 lines after fathom becomes an installable package
 import sys
-sys.path.append('/Users/andrewkan/fathom')
+sys.path.append('./')
 
 
 from absl import app
@@ -38,6 +38,7 @@ import jax.numpy as jnp
 
 from typing import Optional
 import optax
+from jax.config import config
 
 
 FLAGS = flags.FLAGS
@@ -93,6 +94,7 @@ def main(_):
     client_batch_hparams = fedjax.ShuffleRepeatBatchHParams(
         batch_size=FLAGS.batch_size, 
         num_steps=FLAGS.num_steps, 
+        num_epochs=None, # this is required
         seed=jax.random.PRNGKey(17),
     )
     # eta_hyper: Hyperparams = Hyperparams(
@@ -167,11 +169,12 @@ def main(_):
                 server_state.params,
                 test_eval_batches
             )
-            print(f'[round {round_num}] train_metrics={train_metrics}, eta_c={jax.nn.sigmoid(server_state.meta_state.hyperparams.eta_c)}')
+            print(f'[round {round_num}] train_metrics={train_metrics}, eta_c={jax.nn.sigmoid(server_state.meta_state.hyperparams.eta_c)}, GlobLoss={server_state.eval0_loss}')
             print(f'[round {round_num}] test_metrics={test_metrics}')
 
     # Save final trained model parameters to file.
     fedjax.serialization.save_state(server_state.params, '/tmp/params')
 
 if __name__ == '__main__':
+    config.config_with_absl()
     app.run(main)
