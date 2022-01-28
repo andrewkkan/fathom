@@ -44,7 +44,10 @@ from jax.config import config
 FLAGS = flags.FLAGS
 
 flags.DEFINE_float(
-    'eta_hyper', 0.001, 'Meta-learning rate')
+    'eta_hyper_eta_c', 0.01, 'Meta-learning rate')
+
+flags.DEFINE_float(
+    'eta_hyper_tau', 0.01, 'Meta-learning rate')
 
 flags.DEFINE_integer(
     'num_steps', 100, 'Init number of Local Steps (> 0)')
@@ -54,9 +57,6 @@ flags.DEFINE_float(
 
 flags.DEFINE_integer(
     'batch_size', 20, 'Init Local Batch Size')
-
-flags.DEFINE_float(
-    'alpha', 0.9, 'Momentum for global gradient estimate')
 
 
 def main(_):
@@ -89,41 +89,31 @@ def main(_):
     # server_optimizer = fedjax.optimizers.adam(
     #         learning_rate=10**(-2.5), b1=0.9, b2=0.999, eps=10**(-4))
     server_optimizer = fedjax.optimizers.sgd(learning_rate=1.0) # Fed Avg 
-    hyper_optimizer = fedjax.optimizers.adam(learning_rate=FLAGS.eta_hyper)
+    hyper_optimizer = fathom.optimizers.sgd(learning_rate=FLAGS.eta_hyper_eta_c)
     # Hyperparameters for client local traing dataset preparation.
     client_batch_hparams = fedjax.ShuffleRepeatBatchHParams(
-        batch_size=FLAGS.batch_size, 
-        num_steps=FLAGS.num_steps, 
-        num_epochs=None, # this is required
-        seed=jax.random.PRNGKey(17),
+        batch_size = FLAGS.batch_size, 
+        num_steps = FLAGS.num_steps, 
+        num_epochs = None, # It is required to set this to None
+        seed = jax.random.PRNGKey(17),
     )
-    # eta_hyper: Hyperparams = Hyperparams(
-    #     eta_c = FLAGS.eta_he, 
-    #     tau = FLAGS.eta_ht,
-    #     alpha = 0.0, # Static hyper
-    #     bs = 0.0, # Static hyper
-    # )
     server_init_hparams: Hyperparams = Hyperparams(
-        eta_c = FLAGS.eta_c,
+        eta_c = float(FLAGS.eta_c),
         tau = float(FLAGS.num_steps),
-        alpha = FLAGS.alpha,
         bs = float(FLAGS.batch_size),
     )
-    data_dim = dict(
-        # Dim for single sample
-        # There must be a better way to extract these values....
-        x=test_fd.get_client(next(test_fd.client_ids())).all_examples()['x'][0].shape,
-        y=test_fd.get_client(next(test_fd.client_ids())).all_examples()['y'][0].shape,
-    )
+    data_dim = jax.tree_util.tree_map(lambda a: a[0:1].shape, test_fd.get_client(next(test_fd.client_ids())).all_examples())
+    hyper_learning_rates = dict(eta_c = FLAGS.eta_hyper_eta_c, tau = FLAGS.eta_hyper_tau)
     algorithm = fathom_fedavg.federated_averaging(
-        grad_fn, 
-        client_optimizer,
-        server_optimizer,
-        hyper_optimizer,
-        client_batch_hparams,
-        server_init_hparams,
-        model,
-        data_dim,
+        grad_fn = grad_fn, 
+        client_optimizer = client_optimizer,
+        server_optimizer = server_optimizer,
+        hyper_optimizer = hyper_optimizer,
+        client_batch_hparams = client_batch_hparams,
+        server_init_hparams = server_init_hparams,
+        hyper_learning_rates = hyper_learning_rates,
+        model = model,
+        data_dim = data_dim,
     )
 
     # Initialize model parameters and algorithm server state.
@@ -169,7 +159,8 @@ def main(_):
                 server_state.params,
                 test_eval_batches
             )
-            print(f'[round {round_num}] train_metrics={train_metrics}, eta_c={jax.nn.sigmoid(server_state.meta_state.hyperparams.eta_c)}, GlobLoss={server_state.eval0_loss}, Sigma2={server_state.mean_sigma2}, Victor={server_state.mean_victor}')
+            print(f'[round {round_num}] train_metrics={train_metrics}')
+            print(f'[round {round_num}] eta_c={server_state.meta_state.hyperparams.eta_c}, globLoss={server_state.eval0_loss}, sigma2={server_state.mean_sigma2}, victor={server_state.mean_victor}, tau={server_state.meta_state.hyperparams.tau}')
             print(f'[round {round_num}] test_metrics={test_metrics}')
 
     # Save final trained model parameters to file.
