@@ -102,7 +102,6 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
             batch=batch, sb_size=3, 
             use_rng=use_rng, metrics_rng=metrics_rng,
         )
-        sigma2 = 0.0
         opt_state, params = client_optimizer.apply(grad_opt, client_step_state['opt_state'], client_step_state['params'])
         next_client_step_state = {
             'params': params,
