@@ -43,12 +43,6 @@ from jax.config import config
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_float(
-    'eta_hyper_eta_c', 0.01, 'Meta-learning rate')
-
-flags.DEFINE_float(
-    'eta_hyper_tau', 0.01, 'Meta-learning rate')
-
 flags.DEFINE_integer(
     'num_steps', 100, 'Init number of Local Steps (> 0)')
 
@@ -89,7 +83,6 @@ def main(_):
     # server_optimizer = fedjax.optimizers.adam(
     #         learning_rate=10**(-2.5), b1=0.9, b2=0.999, eps=10**(-4))
     server_optimizer = fedjax.optimizers.sgd(learning_rate=1.0) # Fed Avg 
-    hyper_optimizer = fathom.optimizers.sgd(learning_rate=FLAGS.eta_hyper_eta_c)
     # Hyperparameters for client local traing dataset preparation.
     client_batch_hparams = fedjax.ShuffleRepeatBatchHParams(
         batch_size = FLAGS.batch_size, 
@@ -103,15 +96,12 @@ def main(_):
         bs = float(FLAGS.batch_size),
     )
     data_dim = jax.tree_util.tree_map(lambda a: a[0:1].shape, test_fd.get_client(next(test_fd.client_ids())).all_examples())
-    hyper_learning_rates = dict(eta_c = FLAGS.eta_hyper_eta_c, tau = FLAGS.eta_hyper_tau)
     algorithm = fathom_fedavg.federated_averaging(
         grad_fn = grad_fn, 
         client_optimizer = client_optimizer,
         server_optimizer = server_optimizer,
-        hyper_optimizer = hyper_optimizer,
         client_batch_hparams = client_batch_hparams,
         server_init_hparams = server_init_hparams,
-        hyper_learning_rates = hyper_learning_rates,
         model = model,
         data_dim = data_dim,
     )
@@ -160,7 +150,7 @@ def main(_):
                 test_eval_batches
             )
             print(f'[round {round_num}] train_metrics={train_metrics}')
-            print(f'[round {round_num}] eta_c={server_state.meta_state.hyperparams.eta_c}, globLoss={server_state.eval0_loss}, sigma2={server_state.mean_sigma2}, victor={server_state.mean_victor}, tau={server_state.meta_state.hyperparams.tau}')
+            print(f'[round {round_num}] eta_c={server_state.meta_state.hyperparams.eta_c}, victor={server_state.mean_victor}, tau={server_state.meta_state.hyperparams.tau}')
             print(f'[round {round_num}] test_metrics={test_metrics}')
 
     # Save final trained model parameters to file.
