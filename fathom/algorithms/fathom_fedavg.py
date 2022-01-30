@@ -344,7 +344,7 @@ def federated_averaging(
         phase = server_state.meta_state.phase
         param = server_state.meta_state.hyperparams.tau
         if phase == 1:
-            eta_c = float(1.0 / lipschitz_ub)
+            eta_c = float(0.25 / lipschitz_ub)
             tau = jax.nn.relu(param)
             # Need condtion for phase transition
         elif phase == 2:
