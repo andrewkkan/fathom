@@ -308,7 +308,7 @@ def federated_averaging(
         lipschitz_ub: Optional[jnp.ndarray] = autoLip(data_dim, params, model)
         print(f"LIP = {lipschitz_ub}")
         if lipschitz_ub is None:
-            lipschitz_ub = max(server_state.meta_state.lipschitz_ub, 2.0)
+            lipschitz_ub = max(server_state.lipschitz_ub, 2.0)
         grad_glob: Params = estimate_grad_glob(server_state, mean_delta_params)
         meta_state: MetaState = hyper_update(
             server_state = server_state, 
