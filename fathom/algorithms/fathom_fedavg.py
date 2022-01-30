@@ -101,7 +101,7 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
 
     def client_final(shared_input, client_step_state) -> Tuple[Params, jnp.ndarray]:
         delta_params = jax.tree_util.tree_multimap(jnp.subtract, shared_input['params'], client_step_state['params'])
-        return delta_params, client_step_state['min_tau'], client_step_state['min_hypergrad']
+        return delta_params, client_step_state['min_hypergrad']
 
     return for_each_client.for_each_client(client_init, client_step, client_final)
 
@@ -154,13 +154,15 @@ class Hyperparams:
     eta_c: float    # Local learning rate or step size
     tau: float      # Number of local steps
     bs: float       # Local batch size
+    alpha: float    # Momentum for glob grad estimation
 
 
 @dataclasses.dataclass
 class MetaState:
     hyperparams: Hyperparams 
     phase: int # TBD
-    lipschitz_ub: float
+    hypergrad_glob: float
+    hypergrad_local: float
 
 
 @dataclasses.dataclass
@@ -175,13 +177,28 @@ class ServerState:
     opt_state: optimizers.OptState
     round_index: int
     meta_state: MetaState
+    lipschitz_ub: float
+    grad_glob: Params
     mean_victor: float
+
+
+@jax.jit
+def estimate_grad_glob(server_state: ServerState, mean_delta_params: Params) -> Params:
+    grad_glob = tree_util.tree_weight(server_state.grad_glob, server_state.meta_state.hyperparams.alpha)
+    delta_params = tree_util.tree_weight(mean_delta_params, 1. - server_state.meta_state.hyperparams.alpha)
+    grad_glob = tree_util.tree_add(grad_glob, delta_params)
+    grad_glob = fathom.core.tree_util.tree_inverse_weight(
+        grad_glob, 
+        (1. - server_state.meta_state.hyperparams.alpha ** server_state.round_index)
+    )
+    return grad_glob
 
 
 def federated_averaging(
         grad_fn: Callable[[Params, BatchExample, PRNGKey], Grads],
         client_optimizer: optimizers.Optimizer,
         server_optimizer: optimizers.Optimizer,
+        hyper_optimizer: optimizers.Optimizer,
         client_batch_hparams: client_datasets.ShuffleRepeatBatchHParams,
         server_init_hparams: Hyperparams,
         model: models.Model,
@@ -207,13 +224,16 @@ def federated_averaging(
         meta_state = MetaState(
             hyperparams = server_init_hparams,
             phase = 1,
-            lipschitz_ub = 0.0,
+            hypergrad_glob = 0.,
+            hypergrad_local = 0.,
         )
         # Need to initialize round_index to 1 for bias comp
         return ServerState(
             params = params, 
             opt_state = opt_state_server, 
             round_index = 1, 
+            lipschitz_ub = 0.0,
+            grad_glob = tree_util.tree_zeros_like(params),
             meta_state = meta_state,
             mean_victor = 0.0,
         )
@@ -246,21 +266,23 @@ def federated_averaging(
         # large depending on the model parameters size.
         delta_params_sum = tree_util.tree_zeros_like(server_state.params)
         delta_params_seq: PyTree = []
+        hypergrad_local_sum = jnp.array(0.0)
         num_examples_sum = 0.
-        for client_id, (delta_params, min_tau, min_hypergrad) in train_for_each_client(shared_input, batch_clients):
+        for client_id, (delta_params, min_hypergrad) in train_for_each_client(shared_input, batch_clients):
             # Server collecting stats before sending them to server_update for updating params and metrics.
             num_examples = tau * bs  # used to be num_examples = client_num_examples[client_id]
             delta_params_sum = tree_util.tree_add(
                 delta_params_sum, tree_util.tree_weight(delta_params, num_examples))
             delta_params_seq.append(delta_params) 
+            hypergrad_local_sum = hypergrad_local_sum + min_hypergrad
             num_examples_sum += num_examples
             # We record the l2 norm of client updates as an example, but it is not
             # required for the algorithm.
             client_diagnostics[client_id] = {
                     'delta_l2_norm': tree_util.tree_l2_norm(delta_params),
             }
-            print(client_id, min_tau, min_hypergrad)
-        mean_delta_params = tree_util.tree_inverse_weight(delta_params_sum, num_examples_sum)
+        mean_delta_params = fathom.core.tree_util.tree_inverse_weight(delta_params_sum, num_examples_sum)
+        mean_hypergrad_local = hypergrad_local_sum / num_examples_sum
         # Expected value of Vk, as defined in "Local SGD: Unified Theory..." by Gorbunov (arxiv:2011.02828)
         # See section 2 and Lemma G.4 (81) for details.
         victor_sum = jnp.array(0.)
@@ -269,34 +291,56 @@ def federated_averaging(
                 jax.tree_util.tree_multimap(jnp.subtract, dp, mean_delta_params), 
             )) * num_examples 
         mean_victor = victor_sum / jnp.array(num_examples_sum) 
-        server_state = server_update(server_state, mean_delta_params, mean_victor)
+        server_state = server_update(server_state, mean_delta_params, mean_hypergrad_local, mean_victor)
         return server_state, client_diagnostics
 
-    def server_update(server_state, mean_delta_params, mean_victor):
+    def server_update(
+        server_state: ServerState, 
+        mean_delta_params: Params, 
+        mean_hypergrad_local: jnp.ndarray, 
+        mean_victor: jnp.ndarray,
+    ) -> ServerState:
         opt_state_server, params = server_optimizer.apply(
             mean_delta_params, 
             server_state.opt_state, 
             server_state.params,
         )
-        meta_state: MetaState = hyper_update(server_state, params, mean_victor)
+        lipschitz_ub: Optional[jnp.ndarray] = autoLip(data_dim, params, model)
+        print(f"LIP = {lipschitz_ub}")
+        if lipschitz_ub is None:
+            lipschitz_ub = max(server_state.meta_state.lipschitz_ub, 2.0)
+        grad_glob: Params = estimate_grad_glob(server_state, mean_delta_params)
+        meta_state: MetaState = hyper_update(
+            server_state = server_state, 
+            params = params, 
+            lipschitz_ub = lipschitz_ub, 
+            grad_glob = grad_glob, 
+            delta_params = mean_delta_params,
+            hypergrad_local = mean_hypergrad_local,
+            mean_victor = mean_victor,
+        )
         return ServerState(
             params = params,
             opt_state = opt_state_server,
             round_index = server_state.round_index + 1,
             meta_state = meta_state,
+            lipschitz_ub = lipschitz_ub,
+            grad_glob = grad_glob,
             mean_victor = mean_victor,
         )
 
     def hyper_update(
         server_state: ServerState,
         params: Params,
+        lipschitz_ub: jnp.ndarray,
+        grad_glob: Params,
+        delta_params: Params,
+        hypergrad_local: jnp.ndarray,
         mean_victor: jnp.ndarray,
     ) -> MetaState:
 
-        lipschitz_ub: Optional[jnp.ndarray] = autoLip(data_dim, params, model)
-        print(f"LIP = {lipschitz_ub}")
-        if lipschitz_ub is None:
-            lipschitz_ub = max(server_state.meta_state.lipschitz_ub, 2.0)
+        hypergrad_glob: float = fathom.core.tree_util.tree_dot(grad_glob, delta_params)
+
         phase = server_state.meta_state.phase
         param = server_state.meta_state.hyperparams.tau
         if phase == 1:
@@ -315,11 +359,13 @@ def federated_averaging(
             eta_c = eta_c,
             tau = max(1.0, tau),
             bs = server_state.meta_state.hyperparams.bs,
+            alpha = server_state.meta_state.hyperparams.alpha, 
         )
         meta_state = MetaState(
             hyperparams = hyperparams,
             phase = phase,
-            lipschitz_ub = lipschitz_ub,
+            hypergrad_glob = hypergrad_glob,
+            hypergrad_local = hypergrad_local,
         )        
         return meta_state
 

@@ -44,6 +44,12 @@ from jax.config import config
 FLAGS = flags.FLAGS
 
 flags.DEFINE_integer(
+    'sim_rounds', 1501, 'Total number of rounds for sim run.')
+
+flags.DEFINE_float(
+    'alpha', 0.5, 'Momentum for global grad estimation.')
+
+flags.DEFINE_integer(
     'num_steps', 100, 'Init number of Local Steps (> 0)')
 
 flags.DEFINE_float(
@@ -82,7 +88,9 @@ def main(_):
     client_optimizer = fathom.optimizers.sgd(learning_rate=FLAGS.eta_c)
     # server_optimizer = fedjax.optimizers.adam(
     #         learning_rate=10**(-2.5), b1=0.9, b2=0.999, eps=10**(-4))
-    server_optimizer = fedjax.optimizers.sgd(learning_rate=1.0) # Fed Avg 
+    server_optimizer = fedjax.optimizers.sgd(learning_rate=1.0) # Fed Avg
+    hyper_optimizer = fedjax.optimizers.adam(
+        learning_rate=10**(-2.5), b1=0.9, b2=0.999, eps=10**(-4)) 
     # Hyperparameters for client local traing dataset preparation.
     client_batch_hparams = fedjax.ShuffleRepeatBatchHParams(
         batch_size = FLAGS.batch_size, 
@@ -94,12 +102,14 @@ def main(_):
         eta_c = float(FLAGS.eta_c),
         tau = float(FLAGS.num_steps),
         bs = float(FLAGS.batch_size),
+        alpha = float(FLAGS.alpha),
     )
     data_dim = jax.tree_util.tree_map(lambda a: a[0:1].shape, test_fd.get_client(next(test_fd.client_ids())).all_examples())
     algorithm = fathom_fedavg.federated_averaging(
         grad_fn = grad_fn, 
         client_optimizer = client_optimizer,
         server_optimizer = server_optimizer,
+        hyper_optimizer = hyper_optimizer,
         client_batch_hparams = client_batch_hparams,
         server_init_hparams = server_init_hparams,
         model = model,
@@ -113,7 +123,7 @@ def main(_):
     # Train and eval loop.
     train_client_sampler = fedjax.client_samplers.UniformGetClientSampler(
             fd=train_fd, num_clients=10, seed=0)
-    for round_num in range(1, 1501):
+    for round_num in range(1, FLAGS.sim_rounds):
         # Sample 10 clients per round without replacement for training.
         clients = train_client_sampler.sample()
         # Run one round of training on sampled clients.
@@ -150,7 +160,8 @@ def main(_):
                 test_eval_batches
             )
             print(f'[round {round_num}] train_metrics={train_metrics}')
-            print(f'[round {round_num}] eta_c={server_state.meta_state.hyperparams.eta_c}, victor={server_state.mean_victor}, tau={server_state.meta_state.hyperparams.tau}')
+            print(f'[round {round_num}] eta_c={server_state.meta_state.hyperparams.eta_c}, tau={server_state.meta_state.hyperparams.tau}')
+            print(f'[round {round_num}] hypergrad_glob={server_state.meta_state.hypergrad_glob}, hypergrad_local={server_state.meta_state.hypergrad_local}, victor={server_state.mean_victor}')
             print(f'[round {round_num}] test_metrics={test_metrics}')
 
     # Save final trained model parameters to file.
