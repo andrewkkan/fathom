@@ -67,7 +67,8 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
             'tau': shared_input['tau'],
             'eta_c': shared_input['eta_c'],
             'min_tau': shared_input['tau'],
-        }
+            'min_hypergrad': tree_util.tree_l2_norm(shared_input['params']), # Large enough value
+            }
         return client_step_state
 
     def client_step(client_step_state, batch):
@@ -82,6 +83,9 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
                 client_step_state['step_idx']
             )
         )
+        min_hypergrad = jnp.where(hypergrad > client_step_state['min_hypergrad'],
+            client_step_state['min_hypergrad'], hypergrad
+        )
         next_client_step_state = {
             'params': params,
             'params0': client_step_state['params0'],
@@ -91,12 +95,13 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
             'tau': client_step_state['tau'],
             'eta_c': client_step_state['eta_c'],
             'min_tau': min_tau,
+            'min_hypergrad': min_hypergrad,
         }
         return next_client_step_state
 
     def client_final(shared_input, client_step_state) -> Tuple[Params, jnp.ndarray]:
         delta_params = jax.tree_util.tree_multimap(jnp.subtract, shared_input['params'], client_step_state['params'])
-        return delta_params, client_step_state['min_tau']
+        return delta_params, client_step_state['min_tau'], client_step_state['min_hypergrad']
 
     return for_each_client.for_each_client(client_init, client_step, client_final)
 
@@ -242,7 +247,7 @@ def federated_averaging(
         delta_params_sum = tree_util.tree_zeros_like(server_state.params)
         delta_params_seq: PyTree = []
         num_examples_sum = 0.
-        for client_id, (delta_params, min_tau) in train_for_each_client(shared_input, batch_clients):
+        for client_id, (delta_params, min_tau, min_hypergrad) in train_for_each_client(shared_input, batch_clients):
             # Server collecting stats before sending them to server_update for updating params and metrics.
             num_examples = tau * bs  # used to be num_examples = client_num_examples[client_id]
             delta_params_sum = tree_util.tree_add(
@@ -254,7 +259,7 @@ def federated_averaging(
             client_diagnostics[client_id] = {
                     'delta_l2_norm': tree_util.tree_l2_norm(delta_params),
             }
-            print(client_id, min_tau)
+            print(client_id, min_tau, min_hypergrad)
         mean_delta_params = tree_util.tree_inverse_weight(delta_params_sum, num_examples_sum)
         # Expected value of Vk, as defined in "Local SGD: Unified Theory..." by Gorbunov (arxiv:2011.02828)
         # See section 2 and Lemma G.4 (81) for details.
@@ -293,10 +298,10 @@ def federated_averaging(
         if lipschitz_ub is None:
             lipschitz_ub = max(server_state.meta_state.lipschitz_ub, 2.0)
         phase = server_state.meta_state.phase
-        param = 0.0
+        param = server_state.meta_state.hyperparams.tau
         if phase == 1:
             eta_c = float(1.0 / lipschitz_ub)
-            tau = jax.nn.sigmoid(param) * 200.0 
+            tau = jax.nn.relu(param)
             # Need condtion for phase transition
         elif phase == 2:
             eta_c = jax.nn.sigmoid(param)
