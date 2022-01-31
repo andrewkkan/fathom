@@ -37,7 +37,6 @@ import jax
 import jax.numpy as jnp
 
 from typing import Optional
-import optax
 from jax.config import config
 
 
@@ -49,11 +48,8 @@ flags.DEFINE_integer(
 flags.DEFINE_float(
     'alpha', 0.5, 'Momentum for global grad estimation.')
 
-flags.DEFINE_integer(
-    'num_steps', 100, 'Init number of Local Steps (> 0)')
-
 flags.DEFINE_float(
-    'eta_h', 2.0, 'Init Hyper Learning Rate')
+    'eta_h', 0.25, 'Init Hyper Learning Rate')
 
 flags.DEFINE_float(
     'eta_c', 10**(-1.5), 'Init Client Learning Rate')
@@ -95,14 +91,12 @@ def main(_):
     hyper_optimizer = fedjax.optimizers.sgd(learning_rate = FLAGS.eta_h) 
     # Hyperparameters for client local traing dataset preparation.
     client_batch_hparams = fedjax.ShuffleRepeatBatchHParams(
-        batch_size = FLAGS.batch_size, 
-        num_steps = FLAGS.num_steps, 
-        num_epochs = None, # It is required to set this to None
+        batch_size = FLAGS.batch_size, # Ideally this is adaptive and not necessary but batch_size is required.
         seed = jax.random.PRNGKey(17),
     )
     server_init_hparams: Hyperparams = Hyperparams(
         eta_c = float(FLAGS.eta_c),
-        tau = float(FLAGS.num_steps),
+        tau = 10.0, # Initialize with 1 epoch's worth of data
         bs = float(FLAGS.batch_size),
         alpha = float(FLAGS.alpha),
     )

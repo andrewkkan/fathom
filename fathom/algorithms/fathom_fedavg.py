@@ -64,8 +64,6 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
             'opt_state': opt_state,
             'rng': client_rng,
             'step_idx': 0,
-            'tau': shared_input['tau'],
-            'eta_c': shared_input['eta_c'],
             'min_hypergrad': tree_util.tree_l2_norm(shared_input['params']), # Large enough value
             }
         return client_step_state
@@ -85,15 +83,13 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
             'opt_state': opt_state,
             'rng': rng,
             'step_idx': client_step_state['step_idx'] + 1,
-            'tau': client_step_state['tau'],
-            'eta_c': client_step_state['eta_c'],
             'min_hypergrad': min_hypergrad,
         }
         return next_client_step_state
 
     def client_final(shared_input, client_step_state) -> Tuple[Params, jnp.ndarray]:
         delta_params = jax.tree_util.tree_multimap(jnp.subtract, shared_input['params'], client_step_state['params'])
-        return delta_params, client_step_state['min_hypergrad']
+        return delta_params, client_step_state['min_hypergrad'], client_step_state['step_idx']
 
     return for_each_client.for_each_client(client_init, client_step, client_final)
 
@@ -144,7 +140,7 @@ def autoLip(
 @dataclasses.dataclass
 class Hyperparams:
     eta_c: float    # Local learning rate or step size
-    tau: float      # Number of local steps
+    tau: float      # Number of local steps = ceil(local_samples / batch_size) * tau, where tau ~ num epochs worth of data.
     bs: float       # Local batch size
     alpha: float    # Momentum for glob grad estimation
 
@@ -219,7 +215,7 @@ def federated_averaging(
         meta_state = MetaState(
             hyperparams = server_init_hparams,
             opt_state = opt_state_hyper,
-            opt_param = jnp.array(server_init_hparams.tau).astype(float),
+            opt_param = jnp.array(server_init_hparams.tau), # Phase 1 starts with tau optim
             phase = 1,
             hypergrad_glob = 0.,
             hypergrad_local = 0.,
@@ -244,18 +240,18 @@ def federated_averaging(
         ]],
     ) -> Tuple[ServerState, Mapping[federated_data.ClientId, Any]]:
         client_num_examples = {cid: len(cds) for cid, cds, _ in clients}
-        tau = int(server_state.meta_state.hyperparams.tau)
-        bs = int(server_state.meta_state.hyperparams.bs)
-        client_batch_hparams_adaptive = client_datasets.ShuffleRepeatBatchHParams(
-            batch_size = bs, 
-            num_steps = tau, 
-            num_epochs = None, # This is required.  See ShuffleRepeatBatchView implementation in fedjax.core.client_datasets.py.
-            drop_remainder = client_batch_hparams.drop_remainder,
-            seed = client_batch_hparams.seed,
-            skip_shuffle = client_batch_hparams.skip_shuffle,
-        )
-        batch_clients = [(cid, cds.shuffle_repeat_batch(client_batch_hparams_adaptive), crng)
-                                         for cid, cds, crng in clients]
+        tau: float = server_state.meta_state.hyperparams.tau
+        bs: int = int(server_state.meta_state.hyperparams.bs)
+        batch_clients = [(cid, cds.shuffle_repeat_batch(
+            client_datasets.ShuffleRepeatBatchHParams(
+                batch_size = bs, 
+                num_steps = int(max(1.0, jnp.ceil(tau * client_num_examples[cid] / bs))), 
+                num_epochs = None, # This is required.  See ShuffleRepeatBatchView implementation in fedjax.core.client_datasets.py.
+                drop_remainder = client_batch_hparams.drop_remainder,
+                seed = client_batch_hparams.seed,
+                skip_shuffle = client_batch_hparams.skip_shuffle,
+            )
+        ), crng) for cid, cds, crng in clients]
         shared_input = {'params': server_state.params, 'eta_c': server_state.meta_state.hyperparams.eta_c, 'tau': tau, 'bs': bs}
         client_diagnostics = {}
         # Running weighted mean of client updates. We do this iteratively to avoid
@@ -265,21 +261,23 @@ def federated_averaging(
         delta_params_seq: PyTree = []
         hypergrad_local_sum = jnp.array(0.0)
         num_examples_sum = 0.
-        for client_id, (delta_params, min_hypergrad) in train_for_each_client(shared_input, batch_clients):
+        for client_id, (delta_params, min_hypergrad, num_steps) in train_for_each_client(shared_input, batch_clients):
             # Server collecting stats before sending them to server_update for updating params and metrics.
-            num_examples = tau * bs  # used to be num_examples = client_num_examples[client_id]
-            delta_params_sum = tree_util.tree_add(
-                delta_params_sum, tree_util.tree_weight(delta_params, num_examples))
-            delta_params_seq.append(delta_params) 
-            hypergrad_local_sum = hypergrad_local_sum + min_hypergrad
+            num_examples = client_num_examples[client_id]
+            weighted_delta_params =  tree_util.tree_weight(delta_params, num_examples)
+            delta_params_sum = tree_util.tree_add(delta_params_sum, weighted_delta_params)
+            delta_params_seq.append(weighted_delta_params) 
+            hypergrad_local_sum = hypergrad_local_sum + min_hypergrad * num_examples
             num_examples_sum += num_examples
             # We record the l2 norm of client updates as an example, but it is not
             # required for the algorithm.
             client_diagnostics[client_id] = {
                     'delta_l2_norm': tree_util.tree_l2_norm(delta_params),
             }
+            print(f'client_id = {client_id}, num_steps taken = {num_steps}')
         mean_delta_params = fathom.core.tree_util.tree_inverse_weight(delta_params_sum, num_examples_sum)
         mean_hypergrad_local = hypergrad_local_sum / num_examples_sum
+        delta_params_seq = [fathom.core.tree_util.tree_inverse_weight(dp, num_examples_sum) for dp in delta_params_seq]
         # Expected value of Vk, as defined in "Local SGD: Unified Theory..." by Gorbunov (arxiv:2011.02828)
         # See section 2 and Lemma G.4 (81) for details.
         victor_sum = jnp.array(0.)
@@ -340,10 +338,9 @@ def federated_averaging(
         opt_state, opt_param = hyper_optimizer.apply(hypergrad, server_state.meta_state.opt_state, server_state.meta_state.opt_param)
 
         phase = server_state.meta_state.phase
-        param = server_state.meta_state.hyperparams.tau
         if phase == 1:
             eta_c = float(0.25 / lipschitz_ub)
-            tau = jnp.where(opt_param > 1.0, opt_param, 1).astype(int)
+            tau = float(jax.nn.relu(opt_param))
             # Need condtion for phase transition
         elif phase == 2:
             eta_c = jax.nn.sigmoid(opt_param)
@@ -351,11 +348,11 @@ def federated_averaging(
             # Need condtion for phase transition
         elif phase == 3:
             eta_c = jax.nn.sigmoid(opt_param)
-            tau = 1.0
+            tau = 0.0
 
         hyperparams = Hyperparams(
             eta_c = eta_c,
-            tau = max(1.0, tau),
+            tau = tau,
             bs = server_state.meta_state.hyperparams.bs,
             alpha = server_state.meta_state.hyperparams.alpha, 
         )
