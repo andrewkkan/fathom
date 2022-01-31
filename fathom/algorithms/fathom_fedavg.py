@@ -334,7 +334,16 @@ def federated_averaging(
 
         grad_glob = server_state.grad_glob # Do not use the most current grad_glob as the result will bias positive
         hypergrad_glob: float = fathom.core.tree_util.tree_dot(grad_glob, delta_params)
-        hypergrad = -hypergrad_local
+        hypergrad = - jnp.where(hypergrad_glob > 0., 
+            jnp.where(hypergrad_local > 0., 
+                hypergrad_glob + hypergrad_local,   # Both are positive
+                hypergrad_local                     # hypergrad_local is negative
+            ),
+            jnp.where(hypergrad_local > 0., 
+                hypergrad_glob,                     # hypergrad_glob is negative
+                hypergrad_glob + hypergrad_local  # Both are negative
+            ),
+        )
         opt_state, opt_param = hyper_optimizer.apply(hypergrad, server_state.meta_state.opt_state, server_state.meta_state.opt_param)
 
         phase = server_state.meta_state.phase

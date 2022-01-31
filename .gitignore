@@ -21,3 +21,4 @@ venv/
 jax.iml
 build/
 .git*
+*.log

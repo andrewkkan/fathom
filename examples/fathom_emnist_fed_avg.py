@@ -49,7 +49,7 @@ flags.DEFINE_float(
     'alpha', 0.5, 'Momentum for global grad estimation.')
 
 flags.DEFINE_float(
-    'eta_h', 0.25, 'Init Hyper Learning Rate')
+    'eta_h', 1.0, 'Init Hyper Learning Rate')
 
 flags.DEFINE_float(
     'eta_c', 10**(-1.5), 'Init Client Learning Rate')
@@ -96,7 +96,7 @@ def main(_):
     )
     server_init_hparams: Hyperparams = Hyperparams(
         eta_c = float(FLAGS.eta_c),
-        tau = 10.0, # Initialize with 1 epoch's worth of data
+        tau = 1.0, # Initialize with 1 epoch's worth of data
         bs = float(FLAGS.batch_size),
         alpha = float(FLAGS.alpha),
     )
