@@ -53,6 +53,9 @@ flags.DEFINE_integer(
     'num_steps', 100, 'Init number of Local Steps (> 0)')
 
 flags.DEFINE_float(
+    'eta_h', 2.0, 'Init Hyper Learning Rate')
+
+flags.DEFINE_float(
     'eta_c', 10**(-1.5), 'Init Client Learning Rate')
 
 flags.DEFINE_integer(
@@ -66,10 +69,10 @@ def main(_):
     fedjax.training.set_tf_cpu_only()
 
     # Load train and test federated data for EMNIST.
-    train_fd, test_fd = fedjax.datasets.emnist.load_data(only_digits=False)
+    train_fd, test_fd = fedjax.datasets.emnist.load_data(only_digits = False)
 
     # Create CNN model with dropout.
-    model: models.Model = fedjax.models.emnist.create_conv_model(only_digits=False)
+    model: models.Model = fedjax.models.emnist.create_conv_model(only_digits = False)
 
     # Scalar loss function with model parameters, batch of examples, and seed
     # PRNGKey as input.
@@ -85,12 +88,11 @@ def main(_):
     grad_fn = jax.jit(jax.grad(loss))
 
     # Create federated averaging algorithm.
-    client_optimizer = fathom.optimizers.sgd(learning_rate=FLAGS.eta_c)
+    client_optimizer = fathom.optimizers.sgd(learning_rate = FLAGS.eta_c)
     # server_optimizer = fedjax.optimizers.adam(
     #         learning_rate=10**(-2.5), b1=0.9, b2=0.999, eps=10**(-4))
-    server_optimizer = fedjax.optimizers.sgd(learning_rate=1.0) # Fed Avg
-    hyper_optimizer = fedjax.optimizers.adam(
-        learning_rate=10**(-2.5), b1=0.9, b2=0.999, eps=10**(-4)) 
+    server_optimizer = fedjax.optimizers.sgd(learning_rate = 1.0) # Fed Avg
+    hyper_optimizer = fedjax.optimizers.sgd(learning_rate = FLAGS.eta_h) 
     # Hyperparameters for client local traing dataset preparation.
     client_batch_hparams = fedjax.ShuffleRepeatBatchHParams(
         batch_size = FLAGS.batch_size, 

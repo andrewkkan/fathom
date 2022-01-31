@@ -66,7 +66,6 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
             'step_idx': 0,
             'tau': shared_input['tau'],
             'eta_c': shared_input['eta_c'],
-            'min_tau': shared_input['tau'],
             'min_hypergrad': tree_util.tree_l2_norm(shared_input['params']), # Large enough value
             }
         return client_step_state
@@ -77,12 +76,6 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
         opt_state, params = client_optimizer.apply(grad_opt, client_step_state['opt_state'], client_step_state['params'])
         delta_params = jax.tree_util.tree_multimap(jnp.subtract, client_step_state['params0'], params)
         hypergrad = fathom.core.tree_util.tree_dot(grad_opt, delta_params) 
-        min_tau = jnp.where(hypergrad > 0., client_step_state['min_tau'], 
-            jnp.where(client_step_state['step_idx'] > client_step_state['min_tau'],
-                client_step_state['min_tau'],
-                client_step_state['step_idx']
-            )
-        )
         min_hypergrad = jnp.where(hypergrad > client_step_state['min_hypergrad'],
             client_step_state['min_hypergrad'], hypergrad
         )
@@ -94,7 +87,6 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
             'step_idx': client_step_state['step_idx'] + 1,
             'tau': client_step_state['tau'],
             'eta_c': client_step_state['eta_c'],
-            'min_tau': min_tau,
             'min_hypergrad': min_hypergrad,
         }
         return next_client_step_state
@@ -160,6 +152,8 @@ class Hyperparams:
 @dataclasses.dataclass
 class MetaState:
     hyperparams: Hyperparams 
+    opt_state: optimizers.OptState
+    opt_param: jnp.ndarray
     phase: int # TBD
     hypergrad_glob: float
     hypergrad_local: float
@@ -221,8 +215,11 @@ def federated_averaging(
     def init(params: Params) -> ServerState:
         opt_state_server = server_optimizer.init(params)
         opt_state_client = client_optimizer.init(params) # Just to access hyperparams for eta_c
+        opt_state_hyper = hyper_optimizer.init(server_init_hparams.tau)
         meta_state = MetaState(
             hyperparams = server_init_hparams,
+            opt_state = opt_state_hyper,
+            opt_param = jnp.array(server_init_hparams.tau).astype(float),
             phase = 1,
             hypergrad_glob = 0.,
             hypergrad_local = 0.,
@@ -314,7 +311,6 @@ def federated_averaging(
             server_state = server_state, 
             params = params, 
             lipschitz_ub = lipschitz_ub, 
-            grad_glob = grad_glob, 
             delta_params = mean_delta_params,
             hypergrad_local = mean_hypergrad_local,
             mean_victor = mean_victor,
@@ -333,26 +329,28 @@ def federated_averaging(
         server_state: ServerState,
         params: Params,
         lipschitz_ub: jnp.ndarray,
-        grad_glob: Params,
         delta_params: Params,
         hypergrad_local: jnp.ndarray,
         mean_victor: jnp.ndarray,
     ) -> MetaState:
 
+        grad_glob = server_state.grad_glob # Do not use the most current grad_glob as the result will bias positive
         hypergrad_glob: float = fathom.core.tree_util.tree_dot(grad_glob, delta_params)
+        hypergrad = -hypergrad_local
+        opt_state, opt_param = hyper_optimizer.apply(hypergrad, server_state.meta_state.opt_state, server_state.meta_state.opt_param)
 
         phase = server_state.meta_state.phase
         param = server_state.meta_state.hyperparams.tau
         if phase == 1:
             eta_c = float(0.25 / lipschitz_ub)
-            tau = jax.nn.relu(param)
+            tau = jnp.where(opt_param > 1.0, opt_param, 1).astype(int)
             # Need condtion for phase transition
         elif phase == 2:
-            eta_c = jax.nn.sigmoid(param)
+            eta_c = jax.nn.sigmoid(opt_param)
             tau = server_state.meta_state.hyperparams.tau
             # Need condtion for phase transition
         elif phase == 3:
-            eta_c = jax.nn.sigmoid(param)
+            eta_c = jax.nn.sigmoid(opt_param)
             tau = 1.0
 
         hyperparams = Hyperparams(
@@ -363,6 +361,8 @@ def federated_averaging(
         )
         meta_state = MetaState(
             hyperparams = hyperparams,
+            opt_state = opt_state,
+            opt_param = opt_param,
             phase = phase,
             hypergrad_glob = hypergrad_glob,
             hypergrad_local = hypergrad_local,
