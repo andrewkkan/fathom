@@ -55,8 +55,10 @@ flags.DEFINE_float(
     'eta_c', 10**(-1.5), 'Init Client Learning Rate')
 
 flags.DEFINE_integer(
-    'batch_size', 20, 'Init Local Batch Size')
+    'batch_size', 1, 'Init Local Batch Size')
 
+flags.DEFINE_float(
+    'tau', 1.0, 'Init Num Epochs')
 
 def main(_):
     # We only use TensorFlow for datasets, so we restrict it to CPU only to avoid
@@ -96,7 +98,7 @@ def main(_):
     )
     server_init_hparams: Hyperparams = Hyperparams(
         eta_c = float(FLAGS.eta_c),
-        tau = 1.0, # Initialize with 1 epoch's worth of data
+        tau = FLAGS.tau, # Initialize with 1 epoch's worth of data
         bs = float(FLAGS.batch_size),
         alpha = float(FLAGS.alpha),
     )
@@ -156,8 +158,8 @@ def main(_):
                 test_eval_batches
             )
             print(f'[round {round_num}] train_metrics={train_metrics}')
-            print(f'[round {round_num}] eta_c={server_state.meta_state.hyperparams.eta_c}, tau={server_state.meta_state.hyperparams.tau}')
-            print(f'[round {round_num}] hypergrad_glob={server_state.meta_state.hypergrad_glob}, hypergrad_local={server_state.meta_state.hypergrad_local}, victor={server_state.mean_victor}')
+            print(f'[round {round_num}] eta_c={server_state.meta_state.hyperparams.eta_c}, tau={server_state.meta_state.hyperparams.tau}, bs={server_state.meta_state.hyperparams.bs}')
+            print(f'[round {round_num}] hypergrad_glob={server_state.meta_state.hypergrad_glob}, hypergrad_local={server_state.meta_state.hypergrad_local}')
             print(f'[round {round_num}] test_metrics={test_metrics}')
 
     # Save final trained model parameters to file.
