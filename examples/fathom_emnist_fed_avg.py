@@ -60,6 +60,10 @@ flags.DEFINE_integer(
 flags.DEFINE_float(
     'tau', 1.0, 'Init Num Epochs')
 
+flags.DEFINE_float(
+    'L', 0.1, 'Regularization factor for hyper opt')
+
+
 def main(_):
     # We only use TensorFlow for datasets, so we restrict it to CPU only to avoid
     # issues with certain ops not being available on GPU/TPU.
@@ -101,7 +105,8 @@ def main(_):
         tau = FLAGS.tau, # Initialize with 1 epoch's worth of data
         bs = float(FLAGS.batch_size),
         alpha = float(FLAGS.alpha),
-        eta_h = float(FLAGS.eta_h)
+        eta_h = float(FLAGS.eta_h),
+        L = float(FLAGS.L),
     )
     data_dim = jax.tree_util.tree_map(lambda a: a[0:1].shape, test_fd.get_client(next(test_fd.client_ids())).all_examples())
     algorithm = fathom_fedavg.federated_averaging(

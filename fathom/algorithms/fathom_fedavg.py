@@ -144,6 +144,7 @@ class Hyperparams:
     bs: float       # Local batch size
     alpha: float    # Momentum for glob grad estimation
     eta_h: float    # Hyper optimizer learning rate
+    L: float        # Regularization factor for hyper opt
 
 
 @dataclasses.dataclass
@@ -251,7 +252,7 @@ def federated_averaging(
         eta_c: float = server_state.meta_state.hyperparams.eta_c
         batch_clients = [(cid, cds.shuffle_repeat_batch(
             client_datasets.ShuffleRepeatBatchHParams(
-                batch_size = bs, 
+                batch_size = bs if tau > 0.0 else client_num_examples[cid], 
                 num_steps = int(max(1.0, jnp.ceil(tau * client_num_examples[cid] / bs))), 
                 num_epochs = None, # This is required.  See ShuffleRepeatBatchView implementation in fedjax.core.client_datasets.py.
                 drop_remainder = client_batch_hparams.drop_remainder,
@@ -307,7 +308,8 @@ def federated_averaging(
                 bs = server_state.meta_state.init_hparams.bs * 2.,
                 alpha = server_init_hparams.alpha,
                 eta_h = server_init_hparams.eta_h,
-            )        
+                L = server_init_hparams.L,
+            ) 
             return server_reset(server_state.params_bak, hyperparams)
         elif autolip_out is None:
             lipschitz_ub = max(4.0, server_state.lipschitz_ub * 2.0)
@@ -342,11 +344,11 @@ def federated_averaging(
         grad_glob = server_state.grad_glob # Do not use the most current grad_glob as the result will bias positive
         hypergrad_glob: float = fathom.core.tree_util.tree_dot(grad_glob, delta_params)
         phase = jnp.where(server_state.meta_state.phase == 1,
-            # jnp.where( , # Transition criteria
-            #     1,
-            #     2
-            # ),
-            1, # no transition for now
+            jnp.where(server_state.meta_state.hyperparams.tau > 1.0 or lipschitz_ub < 5.0, # Transition criteria
+                1,
+                2
+            ),
+            # 1, # no transition for now
             2 
         )
 
@@ -361,30 +363,41 @@ def federated_averaging(
         opt_state = server_state.meta_state.opt_state
         hypergrad = - jnp.array([
             hypergrad_glob + hypergrad_local,
-            hypergrad_glob * jax.nn.sigmoid(opt_param[1]) * (1. - jax.nn.sigmoid(opt_param[1])),
+            hypergrad_glob,
             -hypergrad_local,
         ])
-        eta_h = jnp.where(phase == 1,
-            server_state.meta_state.hyperparams.eta_h,
-            0.
+        hypergrad = hypergrad * jnp.array([ # For activation functions if any
+            1.0,
+            jax.nn.sigmoid(opt_param[1]) * (1. - jax.nn.sigmoid(opt_param[1])),
+            1.0,
+        ])
+        hypergrad = hypergrad + jnp.array([ # Regularization if any
+            server_state.meta_state.hyperparams.L * server_state.meta_state.hyperparams.tau,
+            0.,
+            0.,
+        ])
+
+        eta_h = jnp.where(phase == 1, # if
+            server_state.meta_state.hyperparams.eta_h, # then
+            0. # else
         )
         opt_state.hyperparams['learning_rate'] = eta_h 
         opt_state, opt_param = hyper_optimizer.apply(hypergrad, opt_state, opt_param)
 
         # Beware that hypergrads become really noisy or nonexistent during phase 2, so we may want to reduce reliance on them.
-        tau = jnp.where(phase == 1,
-            jnp.where(opt_param[0] >= 1.0,
-                opt_param[0],
-                1.0
+        tau = jnp.where(phase == 1, # if
+            jnp.where(opt_param[0] >= 1.0, # then-if
+                opt_param[0], # then
+                1.0 # else
             ),
-            0. # This means 1 local step 
+            0. # Else.  Value 0 means 1 local step 
         )
-        eta_c = jnp.where(phase == 1,
-            jnp.where(opt_param[1] > 0.25 * lipschitz_ub,
-                0.25 * lipschitz_ub,
-                jax.nn.sigmoid(opt_param[1])
+        eta_c = jnp.where(phase == 1, # if
+            jnp.where(opt_param[1] > 0.25 * lipschitz_ub, # then-if
+                0.25 * lipschitz_ub, # then
+                jax.nn.sigmoid(opt_param[1]) #else
             ),
-            jnp.where(server_state.meta_state.phase == 1,
+            jnp.where(server_state.meta_state.phase == 1, # else-if
                 server_state.meta_state.hyperparams.eta_c, # Transition value for eta_c.  Should multiply by tau??
                 server_state.meta_state.hyperparams.eta_c * server_state.round_index / (server_state.round_index + 1)          
             )
@@ -402,6 +415,7 @@ def federated_averaging(
             tau = tau,
             bs = bs,
             alpha = server_state.meta_state.hyperparams.alpha, 
+            L = server_state.meta_state.hyperparams.L, 
         )
         meta_state = MetaState(
             hyperparams = hyperparams,
