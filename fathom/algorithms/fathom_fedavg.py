@@ -149,6 +149,7 @@ class Hyperparams:
 @dataclasses.dataclass
 class MetaState:
     hyperparams: Hyperparams 
+    init_hparams: Hyperparams
     opt_state: optimizers.OptState
     opt_param: jnp.ndarray
     phase: int # TBD
@@ -215,6 +216,7 @@ def federated_averaging(
         opt_state_hyper = hyper_optimizer.init(opt_param_hyper)
         meta_state = MetaState(
             hyperparams = init_hparams,
+            init_hparams = init_hparams,
             opt_state = opt_state_hyper,
             opt_param = opt_param_hyper,
             phase = 1,
@@ -302,7 +304,7 @@ def federated_averaging(
             hyperparams = Hyperparams(
                 eta_c = server_init_hparams.eta_c,
                 tau = server_init_hparams.tau, 
-                bs = server_state.meta_state.hyperparams.bs * 2.,
+                bs = server_state.meta_state.init_hparams.bs * 2.,
                 alpha = server_init_hparams.alpha,
                 eta_h = server_init_hparams.eta_h,
             )        
@@ -403,6 +405,7 @@ def federated_averaging(
         )
         meta_state = MetaState(
             hyperparams = hyperparams,
+            init_hparams = server_state.meta_state.init_hparams,
             opt_state = opt_state,
             opt_param = opt_param,
             phase = phase,
