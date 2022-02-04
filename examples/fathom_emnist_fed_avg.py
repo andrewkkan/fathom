@@ -90,7 +90,7 @@ def main(_):
     # server_optimizer = fedjax.optimizers.adam(
     #         learning_rate=10**(-2.5), b1=0.9, b2=0.999, eps=10**(-4))
     server_optimizer = fedjax.optimizers.sgd(learning_rate = 1.0) # Fed Avg
-    hyper_optimizer = fedjax.optimizers.sgd(learning_rate = FLAGS.eta_h) 
+    hyper_optimizer = fathom.optimizers.sgd(learning_rate = FLAGS.eta_h) 
     # Hyperparameters for client local traing dataset preparation.
     client_batch_hparams = fedjax.ShuffleRepeatBatchHParams(
         batch_size = FLAGS.batch_size, # Ideally this is adaptive and not necessary but batch_size is required.
@@ -101,6 +101,7 @@ def main(_):
         tau = FLAGS.tau, # Initialize with 1 epoch's worth of data
         bs = float(FLAGS.batch_size),
         alpha = float(FLAGS.alpha),
+        eta_h = float(FLAGS.eta_h)
     )
     data_dim = jax.tree_util.tree_map(lambda a: a[0:1].shape, test_fd.get_client(next(test_fd.client_ids())).all_examples())
     algorithm = fathom_fedavg.federated_averaging(

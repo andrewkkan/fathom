@@ -143,6 +143,7 @@ class Hyperparams:
     tau: float      # Number of local steps = ceil(local_samples / batch_size) * tau, where tau ~ num epochs worth of data.
     bs: float       # Local batch size
     alpha: float    # Momentum for glob grad estimation
+    eta_h: float    # Hyper optimizer learning rate
 
 
 @dataclasses.dataclass
@@ -208,13 +209,14 @@ def federated_averaging(
     """
     train_for_each_client = create_train_for_each_client(grad_fn, client_optimizer, model)
 
-    def init(params: Params) -> ServerState:
+    def server_reset(params: Params, init_hparams: Hyperparams) -> ServerState:
         opt_state_server = server_optimizer.init(params)
-        opt_state_hyper = hyper_optimizer.init(server_init_hparams.tau)
+        opt_param_hyper = jnp.array([init_hparams.tau, init_hparams.eta_c, init_hparams.bs])
+        opt_state_hyper = hyper_optimizer.init(opt_param_hyper)
         meta_state = MetaState(
-            hyperparams = server_init_hparams,
+            hyperparams = init_hparams,
             opt_state = opt_state_hyper,
-            opt_param = jnp.array(server_init_hparams.tau), # Phase 1 starts with tau optim
+            opt_param = opt_param_hyper,
             phase = 1,
             hypergrad_glob = 0.,
             hypergrad_local = 0.,
@@ -228,7 +230,10 @@ def federated_averaging(
             lipschitz_ub = 0.0,
             grad_glob = tree_util.tree_zeros_like(params),
             meta_state = meta_state,
-        )
+        )        
+
+    def init(params: Params) -> ServerState:
+        return server_reset(params, server_init_hparams)
 
     def apply(
         server_state: ServerState,
@@ -294,33 +299,14 @@ def federated_averaging(
         autolip_out: Union[jnp.ndarray, None] = autoLip(data_dim, params, model)
         print(f"LIP = {autolip_out}")
         if autolip_out is None and server_state.lipschitz_ub is None:
-            params_bak = server_state.params_bak
-            opt_state_server = server_optimizer.init(params_bak)
-            opt_state_hyper = hyper_optimizer.init(server_init_hparams.tau)
             hyperparams = Hyperparams(
                 eta_c = server_init_hparams.eta_c,
                 tau = server_init_hparams.tau, 
                 bs = server_state.meta_state.hyperparams.bs * 2.,
                 alpha = server_init_hparams.alpha,
-            )            
-            meta_state = MetaState(
-                hyperparams = hyperparams,
-                opt_state = opt_state_hyper,
-                opt_param = jnp.array(server_init_hparams.tau), # Phase 1 starts with tau optim
-                phase = 1,
-                hypergrad_glob = 0.,
-                hypergrad_local = 0.,
-            )
-            # Need to initialize round_index to 1 for bias comp
-            return ServerState(
-                params = params_bak, 
-                params_bak = params_bak, # Keep initial params rather than update
-                opt_state = opt_state_server, 
-                round_index = server_state.round_index + 1, 
-                lipschitz_ub = 0.0,
-                grad_glob = tree_util.tree_zeros_like(params_bak),
-                meta_state = meta_state,
-            )
+                eta_h = server_init_hparams.eta_h,
+            )        
+            return server_reset(server_state.params_bak, hyperparams)
         elif autolip_out is None:
             lipschitz_ub = max(4.0, server_state.lipschitz_ub * 2.0)
         else:
@@ -353,35 +339,66 @@ def federated_averaging(
 
         grad_glob = server_state.grad_glob # Do not use the most current grad_glob as the result will bias positive
         hypergrad_glob: float = fathom.core.tree_util.tree_dot(grad_glob, delta_params)
-        hypergrad = - jnp.where(hypergrad_glob > 0., 
-            jnp.where(hypergrad_local > 0., 
-                hypergrad_glob + hypergrad_local,   # Both are positive
-                hypergrad_local                     # hypergrad_local is negative
-            ),
-            jnp.where(hypergrad_local > 0., 
-                hypergrad_glob,                     # hypergrad_glob is negative
-                hypergrad_glob + hypergrad_local  # Both are negative
-            ),
+        phase = jnp.where(server_state.meta_state.phase == 1,
+            # jnp.where( , # Transition criteria
+            #     1,
+            #     2
+            # ),
+            1, # no transition for now
+            2 
         )
-        opt_state, opt_param = hyper_optimizer.apply(hypergrad, server_state.meta_state.opt_state, server_state.meta_state.opt_param)
 
-        phase = server_state.meta_state.phase
-        if phase == 1:
-            eta_c = float(0.25 / lipschitz_ub)
-            tau = float(jax.nn.relu(opt_param))
-            # Need condtion for phase transition
-        elif phase == 2:
-            eta_c = jax.nn.sigmoid(opt_param)
-            tau = server_state.meta_state.hyperparams.tau
-            # Need condtion for phase transition
-        elif phase == 3:
-            eta_c = jax.nn.sigmoid(opt_param)
-            tau = 0.0
+        # Use the actual hyperparam values instead of server_state.meta_state.opt_param, because
+        # we want the changes to take effect right away, versus, for example, learning rate that has
+        # adapted to exceed the max of 1/4L and that would take a while to come back below the max.
+        opt_param = jnp.array([ 
+            server_state.meta_state.hyperparams.tau, 
+            -jnp.log(1. / server_state.meta_state.hyperparams.eta_c - 1.),
+            server_state.meta_state.hyperparams.bs
+        ])
+        opt_state = server_state.meta_state.opt_state
+        hypergrad = - jnp.array([
+            hypergrad_glob + hypergrad_local,
+            hypergrad_glob * jax.nn.sigmoid(opt_param[1]) * (1. - jax.nn.sigmoid(opt_param[1])),
+            -hypergrad_local,
+        ])
+        eta_h = jnp.where(phase == 1,
+            server_state.meta_state.hyperparams.eta_h,
+            0.
+        )
+        opt_state.hyperparams['learning_rate'] = eta_h 
+        opt_state, opt_param = hyper_optimizer.apply(hypergrad, opt_state, opt_param)
 
+        # Beware that hypergrads become really noisy or nonexistent during phase 2, so we may want to reduce reliance on them.
+        tau = jnp.where(phase == 1,
+            jnp.where(opt_param[0] >= 1.0,
+                opt_param[0],
+                1.0
+            ),
+            0. # This means 1 local step 
+        )
+        eta_c = jnp.where(phase == 1,
+            jnp.where(opt_param[1] > 0.25 * lipschitz_ub,
+                0.25 * lipschitz_ub,
+                jax.nn.sigmoid(opt_param[1])
+            ),
+            jnp.where(server_state.meta_state.phase == 1,
+                server_state.meta_state.hyperparams.eta_c, # Transition value for eta_c.  Should multiply by tau??
+                server_state.meta_state.hyperparams.eta_c * server_state.round_index / (server_state.round_index + 1)          
+            )
+        )
+        bs = jnp.where(phase == 1,
+            jnp.where(opt_param[2] >= 1.,
+                opt_param[2],
+                1.
+            ),
+            server_state.meta_state.hyperparams.bs * (server_state.round_index + 1) / server_state.round_index 
+        )
         hyperparams = Hyperparams(
             eta_c = eta_c,
+            eta_h = eta_h,
             tau = tau,
-            bs = server_state.meta_state.hyperparams.bs,
+            bs = bs,
             alpha = server_state.meta_state.hyperparams.alpha, 
         )
         meta_state = MetaState(
