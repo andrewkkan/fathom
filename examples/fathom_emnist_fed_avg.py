@@ -60,6 +60,9 @@ flags.DEFINE_integer(
 flags.DEFINE_float(
     'tau', 1.0, 'Init Num Epochs')
 
+flags.DEFINE_string(
+    'model', 'CNN', 'CNN or MLP')
+
 
 def main(_):
     # We only use TensorFlow for datasets, so we restrict it to CPU only to avoid
@@ -70,8 +73,11 @@ def main(_):
     # Load train and test federated data for EMNIST.
     train_fd, test_fd = fedjax.datasets.emnist.load_data(only_digits = False)
 
-    # Create CNN model with dropout.
-    model: models.Model = fedjax.models.emnist.create_conv_model(only_digits = False)
+    if 'CNN' in FLAGS.model:
+        # Create CNN model with dropout.
+        model: models.Model = fedjax.models.emnist.create_conv_model(only_digits = False)
+    elif 'MLP' in FLAGS.model:
+        model: models.model = fathom.models.emnist.create_mlp_model(only_digits = False)
 
     # Scalar loss function with model parameters, batch of examples, and seed
     # PRNGKey as input.
