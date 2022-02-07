@@ -144,7 +144,6 @@ class Hyperparams:
     bs: float       # Local batch size
     alpha: float    # Momentum for glob grad estimation
     eta_h: float    # Hyper optimizer learning rate
-    L: float        # Regularization factor for hyper opt
 
 
 @dataclasses.dataclass
@@ -308,7 +307,6 @@ def federated_averaging(
                 bs = server_state.meta_state.init_hparams.bs * 2.,
                 alpha = server_init_hparams.alpha,
                 eta_h = server_init_hparams.eta_h,
-                L = server_init_hparams.L,
             ) 
             return server_reset(server_state.params_bak, hyperparams)
         elif autolip_out is None:
@@ -344,7 +342,9 @@ def federated_averaging(
         grad_glob = server_state.grad_glob # Do not use the most current grad_glob as the result will bias positive
         hypergrad_glob: float = fathom.core.tree_util.tree_dot(grad_glob, delta_params)
         phase = jnp.where(server_state.meta_state.phase == 1,
-            jnp.where(server_state.meta_state.hyperparams.tau > 1.0 or lipschitz_ub < 5.0, # Transition criteria
+            # Transition criteria.  Lipschitz_ub needs to meet threshold to avoid noise from triggering an intended  
+            #   phase transition in the beginning rounds, before any meaningful features are learned in the NN.
+            jnp.where(server_state.meta_state.hyperparams.tau > 0.0 or lipschitz_ub < 5.0, 
                 1,
                 2
             ),
@@ -372,7 +372,7 @@ def federated_averaging(
             1.0,
         ])
         hypergrad = hypergrad + jnp.array([ # Regularization if any
-            server_state.meta_state.hyperparams.L * server_state.meta_state.hyperparams.tau,
+            0., # Deprecated: server_state.meta_state.hyperparams.L * server_state.meta_state.hyperparams.tau,
             0.,
             0.,
         ])
@@ -398,7 +398,7 @@ def federated_averaging(
                 jax.nn.sigmoid(opt_param[1]) #else
             ),
             jnp.where(server_state.meta_state.phase == 1, # else-if
-                server_state.meta_state.hyperparams.eta_c, # Transition value for eta_c.  Should multiply by tau??
+                server_state.meta_state.hyperparams.eta_c * 0.5 / 0.25, # Transition value for eta_c
                 server_state.meta_state.hyperparams.eta_c * server_state.round_index / (server_state.round_index + 1)          
             )
         )
@@ -415,7 +415,6 @@ def federated_averaging(
             tau = tau,
             bs = bs,
             alpha = server_state.meta_state.hyperparams.alpha, 
-            L = server_state.meta_state.hyperparams.L, 
         )
         meta_state = MetaState(
             hyperparams = hyperparams,
