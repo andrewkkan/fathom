@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Training federated EMNIST via federated averaging.
+"""Training federated Shakespeare via federated averaging.
 
 - The model is a CNN with dropout
 - The client optimizer is SGD
@@ -60,9 +60,6 @@ flags.DEFINE_integer(
 flags.DEFINE_float(
     'tau', 1.0, 'Init Num Epochs')
 
-flags.DEFINE_string(
-    'model', 'CNN', 'CNN or MLP or AE')
-
 flags.DEFINE_integer(
     'clients_per_round', 10, 'Number of clients participating in federated learning in each round.')
 
@@ -73,18 +70,10 @@ def main(_):
     # It does not affect operations other than datasets.
     fedjax.training.set_tf_cpu_only()
 
-    # Load train and test federated data for EMNIST.
-    train_fd, test_fd = fedjax.datasets.emnist.load_data(only_digits = False) # *_fd.num_clients() returns 3400
+    # Load train and test federated data for Shakespeare.
+    train_fd, test_fd = fedjax.datasets.shakespeare.load_data() # *_fd.num_clients() returns 715
 
-    if 'CNN' in FLAGS.model:
-        # Create CNN model with dropout.
-        model: models.Model = fedjax.models.emnist.create_conv_model(only_digits = False)
-    elif 'MLP' in FLAGS.model:
-        # Create multi-layer perceptron model.
-        model: models.model = fathom.models.emnist.create_mlp_model(only_digits = False)
-    elif 'AE' in FLAGS.model:
-        # Create auto-encoder model.
-        model: models.model = fathom.models.emnist.create_autoencoder_model() # only_digits does not matter for AE model
+    model: models.Model = fedjax.models.shakespeare.create_lstm_model()
 
     # Scalar loss function with model parameters, batch of examples, and seed
     # PRNGKey as input.
@@ -135,7 +124,7 @@ def main(_):
 
     # Train and eval loop.
     train_client_sampler = fedjax.client_samplers.UniformGetClientSampler(
-            fd=train_fd, num_clients=FLAGS.clients_per_round, seed=0)
+            fd = train_fd, num_clients = FLAGS.clients_per_round, seed =0 )
     for round_num in range(1, FLAGS.sim_rounds):
         # Sample 10 clients per round without replacement for training.
         clients = train_client_sampler.sample()
@@ -154,11 +143,11 @@ def main(_):
             test_eval_datasets = [cds for _, cds in test_fd.get_clients(client_ids)]
             train_eval_batches = fedjax.padded_batch_client_datasets(
                 train_eval_datasets, 
-                batch_size=256,
+                batch_size = 256,
             )
             test_eval_batches = fedjax.padded_batch_client_datasets(
                 test_eval_datasets, 
-                batch_size=256,
+                batch_size = 256,
             )
 
             # Run evaluation metrics defined in `model.eval_metrics`.

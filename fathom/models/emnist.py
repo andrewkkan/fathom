@@ -19,16 +19,22 @@ import haiku as hk
 import jax
 import numpy as np
 
+import fathom
+
 # Defines the expected structure of input batches to the model. This is used to
 # determine the model parameter shapes.
 _HAIKU_SAMPLE_BATCH = {
     'x': np.zeros((1, 28, 28, 1), dtype=np.float32),
     'y': np.zeros(1, dtype=np.float32)
 }
-_TRAIN_LOSS = lambda b, p: metrics.unreduced_cross_entropy_loss(b['y'], p)
-_EVAL_METRICS = {
+_TRAIN_LOSS_CLASSIFIER = lambda b, p: metrics.unreduced_cross_entropy_loss(b['y'], p)
+_EVAL_METRICS_CLASSIFIER = {
     'loss': metrics.CrossEntropyLoss(),
     'accuracy': metrics.Accuracy()
+}
+_TRAIN_LOSS_AUTOENCODER = lambda b, p: fathom.core.metrics.mean_squared_error_loss(b['x'], p)
+_EVAL_METRICS_AUTOENCODER = {
+    'loss': fathom.core.metrics.MeanSquaredErrorLoss(),
 }
 
 def create_mlp_model(only_digits: bool = False) -> models.Model:
@@ -52,6 +58,35 @@ def create_mlp_model(only_digits: bool = False) -> models.Model:
   return models.create_model_from_haiku(
       transformed_forward_pass=transformed_forward_pass,
       sample_batch=_HAIKU_SAMPLE_BATCH,
-      train_loss=_TRAIN_LOSS,
-      eval_metrics=_EVAL_METRICS)
+      train_loss=_TRAIN_LOSS_CLASSIFIER,
+      eval_metrics=_EVAL_METRICS_CLASSIFIER)
 
+def create_autoencoder_model() -> models.Model:
+  """ AE model used in https://arxiv.org/abs/2003.00295 """ 
+  def forward_pass(batch):
+    network = hk.Sequential([
+        hk.Flatten(),
+        hk.Linear(1000),
+        jax.nn.sigmoid,
+        hk.Linear(500),
+        jax.nn.sigmoid,
+        hk.Linear(250),
+        jax.nn.sigmoid,
+        hk.Linear(30),
+        jax.nn.sigmoid,
+        hk.Linear(250),
+        jax.nn.sigmoid,
+        hk.Linear(500),
+        jax.nn.sigmoid,
+        hk.Linear(1000),
+        jax.nn.sigmoid,
+        hk.Linear(784),
+    ])
+    return network(batch['x'])
+
+  transformed_forward_pass = hk.transform(forward_pass)
+  return models.create_model_from_haiku(
+      transformed_forward_pass=transformed_forward_pass,
+      sample_batch=_HAIKU_SAMPLE_BATCH,
+      train_loss=_TRAIN_LOSS_AUTOENCODER,
+      eval_metrics=_EVAL_METRICS_AUTOENCODER)
