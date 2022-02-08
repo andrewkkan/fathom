@@ -73,7 +73,8 @@ def main(_):
     # Load train and test federated data for Shakespeare.
     train_fd, test_fd = fedjax.datasets.shakespeare.load_data() # *_fd.num_clients() returns 715
 
-    model: models.Model = fedjax.models.shakespeare.create_lstm_model()
+    vocab_size: int, embed_size: int = 86, 8
+    model: models.Model = fedjax.models.shakespeare.create_lstm_model(vocab_size = vocab_size, embed_size = embed_size)
 
     # Scalar loss function with model parameters, batch of examples, and seed
     # PRNGKey as input.

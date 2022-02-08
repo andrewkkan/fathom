@@ -70,10 +70,19 @@ def main(_):
     # It does not affect operations other than datasets.
     fedjax.training.set_tf_cpu_only()
 
-    # Load train and test federated data for Stack Overflow.
+    # Load partially preprocessed splits.
     train_fd, heldout_fd, test_fd = fedjax.datasets.stackoverflow.load_data() # *_fd.num_clients() returns 342477
 
-    model: models.Model = fedjax.models.stackoverflow.create_lstm_model()
+    # Apply tokenizer during batching.
+    tokenizer = fedjax.datasets.stackoverflow.StackoverflowTokenizer()
+    # Same max sequence length as https://arxiv.org/pdf/2003.00295.pdf.
+    max_length = 20
+    train_fd = train_fd.preprocess_batch(tokenizer.as_preprocess_batch(max_length))
+    heldout_fd = heldout_fd.preprocess_batch(tokenizer.as_preprocess_batch(max_length))
+    test_fd = test_fd.preprocess_batch(tokenizer.as_preprocess_batch(max_length))
+    
+    vocab_size: int, embed_size: int = 10000, 96
+    model: models.Model = fedjax.models.stackoverflow.create_lstm_model(vocab_size = vocab_size, embed_size = embed_size, expected_length = 13.3)
 
     # Scalar loss function with model parameters, batch of examples, and seed
     # PRNGKey as input.
