@@ -73,7 +73,7 @@ def main(_):
     # Load train and test federated data for Shakespeare.
     train_fd, test_fd = fedjax.datasets.shakespeare.load_data() # *_fd.num_clients() returns 715
 
-    vocab_size: int, embed_size: int = 86, 8
+    vocab_size, embed_size = 86, 8
     model: models.Model = fedjax.models.shakespeare.create_lstm_model(vocab_size = vocab_size, embed_size = embed_size)
 
     # Scalar loss function with model parameters, batch of examples, and seed
@@ -107,7 +107,6 @@ def main(_):
         alpha = float(FLAGS.alpha),
         eta_h = float(FLAGS.eta_h),
     )
-    data_dim = jax.tree_util.tree_map(lambda a: a[0:1].shape, test_fd.get_client(next(test_fd.client_ids())).all_examples())
     algorithm = fathom_fedavg.federated_averaging(
         grad_fn = grad_fn, 
         client_optimizer = client_optimizer,
@@ -116,7 +115,7 @@ def main(_):
         client_batch_hparams = client_batch_hparams,
         server_init_hparams = server_init_hparams,
         model = model,
-        data_dim = data_dim,
+        vocab_embed_size = {'vocab_size': vocab_size+4, 'embed_size': embed_size},
     )
 
     # Initialize model parameters and algorithm server state.

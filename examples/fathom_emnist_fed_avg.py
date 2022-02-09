@@ -126,7 +126,7 @@ def main(_):
         client_batch_hparams = client_batch_hparams,
         server_init_hparams = server_init_hparams,
         model = model,
-        data_dim = data_dim,
+        img_dim = data_dim,
     )
 
     # Initialize model parameters and algorithm server state.

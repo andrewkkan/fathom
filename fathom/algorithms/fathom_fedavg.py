@@ -29,7 +29,7 @@ Adaptive Federated Optimization
 """
 
 
-from typing import Any, Callable, Mapping, Sequence, Tuple, Union
+from typing import Any, Callable, Mapping, Sequence, Tuple, Union, Optional
 
 from fedjax.core import client_datasets
 from fedjax.core import dataclasses
@@ -95,17 +95,21 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
 
 
 def autoLip(
-    data_dim: Mapping[str, Tuple[int]],
     params: Params, 
     model: models.Model,
+    img_dim: Optional[Mapping[str, Tuple[int]]] = None,
+    vocab_embed_size: Optional[Mapping[str, int]] = None,
 ) -> Union[jnp.ndarray, None]:
     '''
     Based on AutoLip (Algo 2) from "Lipschitz regularity of deep neural networks", arxiv:1805.10965.
     Adapted to estimate Lipschitz of the gradient of the loss function vice the loss function.
     The resulting L is the smoothness factor for convergence.
     '''
-    vl = {k: jnp.zeros(shape=v) for k, v in data_dim.items()}
-    vl['x'] = None # Will regenerate
+    if img_dim:
+        vl = {k: jnp.zeros(shape=v) for k, v in img_dim.items()}
+        vl['x'] = None # Will regenerate
+    elif vocab_embed_size:
+        vl = {'x': None, 'y': None}
     def loss(params: Params, v: BatchExample): 
         preds = model.apply_for_eval(params, v)
         example_loss = model.train_loss(v, preds)
@@ -119,7 +123,10 @@ def autoLip(
     lip_list = []
     for run in range(10): # Number of Monte Carlo trials
         # This outter loop should be parallelized using vmap or something, and jitted.
-        vl['x'] = jax.random.normal(key=jax.random.PRNGKey(17), shape=data_dim['x']) * 0.15 + 0.5
+        if img_dim:
+            vl['x'] = jax.random.normal(key = jax.random.PRNGKey(17), shape = img_dim['x']) * 0.15 + 0.5
+        elif vocab_embed_size:
+            vl['x'] = jax.random.choice(a = vocab_embed_size['vocab_size'], size = 1)
         for idx in range(50): # Rough L estimation
             vl = grad_grad_fn(vl)
             if float(tree_util.tree_l2_norm(vl['x'])) == 0.0:  # Numerical instability where vl lies outside of where gradients are available
@@ -194,7 +201,8 @@ def federated_averaging(
         client_batch_hparams: client_datasets.ShuffleRepeatBatchHParams,
         server_init_hparams: Hyperparams,
         model: models.Model,
-        data_dim: Mapping[str, Tuple[int]],
+        img_dim: Optional[Mapping[str, Tuple[int]]] = None,
+        vocab_embed_size: Optional[Mapping[str, int]] = None,
 ) -> federated_algorithm.FederatedAlgorithm:
     """Builds federated averaging.
 
@@ -298,7 +306,7 @@ def federated_averaging(
             server_state.opt_state, 
             server_state.params,
         )
-        autolip_out: Union[jnp.ndarray, None] = autoLip(data_dim, params, model)
+        autolip_out: Union[jnp.ndarray, None] = autoLip(params = params, model = model, img_dim = img_dim, vocab_embed_size = vocab_embed_size)
         print(f"LIP = {autolip_out}")
         if autolip_out is None and server_state.lipschitz_ub is None:
             hyperparams = Hyperparams(
