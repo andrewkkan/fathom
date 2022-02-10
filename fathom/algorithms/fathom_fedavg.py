@@ -401,8 +401,8 @@ def federated_averaging(
             0. # Else.  Value 0 means 1 local step 
         )
         eta_c = jnp.where(phase == 1, # if
-            jnp.where(opt_param[1] > 0.25 * lipschitz_ub, # then-if
-                0.25 * lipschitz_ub, # then
+            jnp.where(jax.nn.sigmoid(opt_param[1]) > 0.25 / lipschitz_ub, # then-if
+                0.25 / lipschitz_ub, # then
                 jax.nn.sigmoid(opt_param[1]) #else
             ),
             jnp.where(server_state.meta_state.phase == 1, # else-if
