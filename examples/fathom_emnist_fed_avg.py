@@ -66,6 +66,9 @@ flags.DEFINE_string(
 flags.DEFINE_integer(
     'clients_per_round', 10, 'Number of clients participating in federated learning in each round.')
 
+flags.DEFINE_integer(
+    'lipschitz_rounds', 10, 'Number of initial rounds to use Lipschitz estimator to set eta_c.')
+
 
 def main(_):
     # We only use TensorFlow for datasets, so we restrict it to CPU only to avoid
@@ -127,6 +130,7 @@ def main(_):
         server_init_hparams = server_init_hparams,
         model = model,
         img_dim = data_dim,
+        lipschitz_rounds = FLAGS.lipschitz_rounds,
     )
 
     # Initialize model parameters and algorithm server state.

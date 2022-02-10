@@ -178,6 +178,7 @@ class ServerState:
     round_index: int
     meta_state: MetaState
     lipschitz_ub: Union[jnp.ndarray, None]
+    lipschitz_count: int
     grad_glob: Params
 
 
@@ -203,6 +204,7 @@ def federated_averaging(
         model: models.Model,
         img_dim: Optional[Mapping[str, Tuple[int]]] = None,
         vocab_embed_size: Optional[Mapping[str, int]] = None,
+        lipschitz_rounds: int = 0,
 ) -> federated_algorithm.FederatedAlgorithm:
     """Builds federated averaging.
 
@@ -238,6 +240,7 @@ def federated_averaging(
             opt_state = opt_state_server, 
             round_index = 1, 
             lipschitz_ub = 0.0,
+            lipschitz_count = 0,
             grad_glob = tree_util.tree_zeros_like(params),
             meta_state = meta_state,
         )        
@@ -306,21 +309,24 @@ def federated_averaging(
             server_state.opt_state, 
             server_state.params,
         )
-        autolip_out: Union[jnp.ndarray, None] = autoLip(params = params, model = model, img_dim = img_dim, vocab_embed_size = vocab_embed_size)
-        print(f"LIP = {autolip_out}")
-        if autolip_out is None and server_state.lipschitz_ub is None:
-            hyperparams = Hyperparams(
-                eta_c = server_init_hparams.eta_c,
-                tau = server_init_hparams.tau, 
-                bs = server_state.meta_state.init_hparams.bs * 2.,
-                alpha = server_init_hparams.alpha,
-                eta_h = server_init_hparams.eta_h,
-            ) 
-            return server_reset(server_state.params_bak, hyperparams)
-        elif autolip_out is None:
-            lipschitz_ub = max(4.0, server_state.lipschitz_ub * 2.0)
+        if server_state.lipschitz_count > lipschitz_rounds:
+            autolip_out, lipschitz_ub = 1.0, 1.0
         else:
-            lipschitz_ub = autolip_out
+            autolip_out: Union[jnp.ndarray, None] = autoLip(params = params, model = model, img_dim = img_dim, vocab_embed_size = vocab_embed_size)
+            print(f"LIP = {autolip_out}")
+            if autolip_out is None and server_state.lipschitz_ub is None:
+                hyperparams = Hyperparams(
+                    eta_c = server_init_hparams.eta_c,
+                    tau = server_init_hparams.tau, 
+                    bs = server_state.meta_state.init_hparams.bs * 2.,
+                    alpha = server_init_hparams.alpha,
+                    eta_h = server_init_hparams.eta_h,
+                ) 
+                return server_reset(server_state.params_bak, hyperparams)
+            elif autolip_out is None:
+                lipschitz_ub = max(4.0, server_state.lipschitz_ub * 2.0)
+            else:
+                lipschitz_ub = autolip_out
         grad_glob: Params = estimate_grad_glob(server_state, mean_delta_params)
         meta_state: MetaState = hyper_update(
             server_state = server_state, 
@@ -336,6 +342,7 @@ def federated_averaging(
             round_index = server_state.round_index + 1,
             meta_state = meta_state,
             lipschitz_ub = autolip_out,
+            lipschitz_count = server_state.lipschitz_count + 1,
             grad_glob = grad_glob,
         )
 
@@ -401,9 +408,13 @@ def federated_averaging(
             0. # Else.  Value 0 means 1 local step 
         )
         eta_c = jnp.where(phase == 1, # if
-            jnp.where(jax.nn.sigmoid(opt_param[1]) > 0.25 / lipschitz_ub, # then-if
-                0.25 / lipschitz_ub, # then
-                jax.nn.sigmoid(opt_param[1]) #else
+            # jnp.where(jax.nn.sigmoid(opt_param[1]) > 0.25 / lipschitz_ub, # then-if
+            #     0.25 / lipschitz_ub, # then
+            #     jax.nn.sigmoid(opt_param[1]) #else
+            # ),
+            jnp.where(server_state.lipschitz_count > lipschitz_rounds,
+                jax.nn.sigmoid(opt_param[1]),
+                0.25 / lipschitz_ub 
             ),
             jnp.where(server_state.meta_state.phase == 1, # else-if
                 server_state.meta_state.hyperparams.eta_c * 0.5 / 0.25, # Transition value for eta_c
