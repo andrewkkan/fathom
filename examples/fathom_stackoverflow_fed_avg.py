@@ -79,12 +79,10 @@ def main(_):
     # Apply tokenizer during batching.
     tokenizer = fedjax.datasets.stackoverflow.StackoverflowTokenizer()
     # Same max sequence length as https://arxiv.org/pdf/2003.00295.pdf.
-    max_length = 20
+    vocab_size, embed_size, max_length = 10000, 96, 20
     train_fd = train_fd.preprocess_batch(tokenizer.as_preprocess_batch(max_length))
     heldout_fd = heldout_fd.preprocess_batch(tokenizer.as_preprocess_batch(max_length))
     test_fd = test_fd.preprocess_batch(tokenizer.as_preprocess_batch(max_length))
-    
-    vocab_size, embed_size = 10000, 96
     model: models.Model = fedjax.models.stackoverflow.create_lstm_model(vocab_size = vocab_size, embed_size = embed_size, expected_length = 13.3)
 
     # Scalar loss function with model parameters, batch of examples, and seed
@@ -126,7 +124,7 @@ def main(_):
         client_batch_hparams = client_batch_hparams,
         server_init_hparams = server_init_hparams,
         model = model,
-        vocab_embed_size = {'vocab_size': vocab_size+4, 'embed_size': embed_size},
+        vocab_embed_size = {'vocab_size': vocab_size+4, 'embed_size': embed_size, 'max_length': max_length},
         lipschitz_rounds = FLAGS.lipschitz_rounds,
     )
 
@@ -135,13 +133,16 @@ def main(_):
     server_state = algorithm.init(init_params)
 
     # Train and eval loop.
-    train_client_sampler = fedjax.client_samplers.UniformGetClientSampler(
-            fd = train_fd, num_clients = FLAGS.clients_per_round, seed = 0)
+    train_client_sampler, heldout_client_sampler, test_client_sampler = (
+        fedjax.client_samplers.UniformGetClientSampler(fd = train_fd, num_clients = FLAGS.clients_per_round, seed = 1), 
+        fedjax.client_samplers.UniformGetClientSampler(fd = heldout_fd, num_clients = FLAGS.clients_per_round, seed = 2), 
+        fedjax.client_samplers.UniformGetClientSampler(fd = test_fd, num_clients = FLAGS.clients_per_round, seed = 3)  
+    )
     for round_num in range(1, FLAGS.sim_rounds):
         # Sample 10 clients per round without replacement for training.
-        clients = train_client_sampler.sample()
+        train_clients = train_client_sampler.sample()
         # Run one round of training on sampled clients.
-        server_state, client_diagnostics = algorithm.apply(server_state, clients)
+        server_state, client_diagnostics = algorithm.apply(server_state, train_clients)
         print(f'[round {round_num}]')
         # Optionally print client diagnostics if curious about each client's model
         # update's l2 norm.
@@ -150,9 +151,13 @@ def main(_):
         if round_num % 1 == 0:
             # Periodically evaluate the trained server model parameters.
             # Read and combine clients' train and test datasets for evaluation.
-            client_ids = [cid for cid, _, _ in clients]
-            heldout_eval_datasets = [cds for _, cds in heldout_fd.get_clients(client_ids)]
-            test_eval_datasets = [cds for _, cds in test_fd.get_clients(client_ids)]
+            heldout_clients = heldout_client_sampler.sample()
+            test_clients = test_client_sampler.sample()
+            heldout_client_ids = [cid for cid, _, _ in heldout_clients]
+            test_client_ids = [cid for cid, _, _ in test_clients]
+
+            heldout_eval_datasets = [cds for _, cds in heldout_fd.get_clients(heldout_client_ids)]
+            test_eval_datasets = [cds for _, cds in test_fd.get_clients(test_client_ids)]
             heldout_eval_batches = fedjax.padded_batch_client_datasets(
                 heldout_eval_datasets, 
                 batch_size = 256,

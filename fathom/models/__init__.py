@@ -14,4 +14,6 @@
 """Model implementations for FedJAX experimental API."""
 
 from fathom.models import emnist
+from fathom.models import shakespeare
+from fathom.models import stackoverflow
 

@@ -105,18 +105,28 @@ def autoLip(
     Adapted to estimate Lipschitz of the gradient of the loss function vice the loss function.
     The resulting L is the smoothness factor for convergence.
     '''
-    if img_dim:
-        vl = {k: jnp.zeros(shape=v) for k, v in img_dim.items()}
-        vl['x'] = None # Will regenerate
-    elif vocab_embed_size:
-        vl = {'x': None, 'y': None}
+    if vocab_embed_size:
+        if vocab_embed_size['vocab_size'] == 10004: # stackoverflow
+            _model: models.Model = fathom.models.stackoverflow.create_lstm_model_without_embedding(
+                vocab_size = vocab_embed_size['vocab_size'], 
+                embed_size = vocab_embed_size['embed_size'], 
+            )
+        elif vocab_embed_size['vocab_size'] == 90: # shakespeare
+            _model: models.Model = fathom.models.shakespeare.create_lstm_model_without_embedding(
+                vocab_size = vocab_embed_size['vocab_size'], 
+                embed_size = vocab_embed_size['embed_size'], 
+            )
+    elif img_dim:
+        _model: models.Model = model
+
     def loss(params: Params, v: BatchExample): 
-        preds = model.apply_for_eval(params, v)
-        example_loss = model.train_loss(v, preds)
+        preds = _model.apply_for_eval(params, v)
+        example_loss = _model.train_loss(v, preds)
         return jnp.mean(example_loss)
         # return - tree_util.tree_l2_norm(preds) 
     grad_fn = jax.jit(jax.grad(loss))
-    def grad_loss_l2_norm(v: BatchExample):
+    def grad_loss_l2_norm(v_in: BatchExample, v_out: BatchExample):
+        v = {'x': v_in, 'y': v_out}
         grad_loss = grad_fn(params, v)
         return - tree_util.tree_l2_norm(grad_loss)
     grad_grad_fn = jax.jit(jax.grad(grad_loss_l2_norm))
@@ -124,17 +134,20 @@ def autoLip(
     for run in range(10): # Number of Monte Carlo trials
         # This outter loop should be parallelized using vmap or something, and jitted.
         if img_dim:
-            vl['x'] = jax.random.normal(key = jax.random.PRNGKey(17), shape = img_dim['x']) * 0.15 + 0.5
+            vx = jax.random.normal(key = jax.random.PRNGKey(17), shape = img_dim['x']) * 0.15 + 0.5
+            vy = jnp.zeros(shape = img_dim['y'])
         elif vocab_embed_size:
-            vl['x'] = jax.random.choice(a = vocab_embed_size['vocab_size'], size = 1)
+            batch_size = 256
+            vx = jax.random.normal(key = jax.random.PRNGKey(17), shape = (vocab_embed_size['max_length'], batch_size, vocab_embed_size['embed_size'])) * 0.5
+            vy = jax.random.choice(a = vocab_embed_size['vocab_size'], size = (batch_size, vocab_embed_size['max_length']))
         for idx in range(50): # Rough L estimation
-            vl = grad_grad_fn(vl)
-            if float(tree_util.tree_l2_norm(vl['x'])) == 0.0:  # Numerical instability where vl lies outside of where gradients are available
+            vx = grad_grad_fn(vx, vy)
+            if float(jnp.square(vx).sum()) == 0.0:  # Numerical instability where vl lies outside of where gradients are available
                 break
             else:
-                vl['x'] = tree_util.tree_inverse_weight(vl['x'], tree_util.tree_l2_norm(vl['x']))
-        if float(tree_util.tree_l2_norm(vl['x'])) > 0.0:
-            lip_list.append(tree_util.tree_l2_norm(grad_fn(params, vl)))
+                vx = tree_util.tree_inverse_weight(vx, tree_util.tree_l2_norm(vx))
+        if float(jnp.square(vx).sum()) > 0.0:
+            lip_list.append(tree_util.tree_l2_norm(grad_fn(params, {'x': vx, 'y': vy})))
     if lip_list:
         lip_sum = jnp.array(0.)
         for v in lip_list:

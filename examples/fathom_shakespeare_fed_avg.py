@@ -73,10 +73,9 @@ def main(_):
     # It does not affect operations other than datasets.
     fedjax.training.set_tf_cpu_only()
 
+    vocab_size, embed_size, max_length = 86, 8, 80
     # Load train and test federated data for Shakespeare.
     train_fd, test_fd = fedjax.datasets.shakespeare.load_data() # *_fd.num_clients() returns 715
-
-    vocab_size, embed_size = 86, 8
     model: models.Model = fedjax.models.shakespeare.create_lstm_model(vocab_size = vocab_size, embed_size = embed_size)
 
     # Scalar loss function with model parameters, batch of examples, and seed
@@ -118,7 +117,7 @@ def main(_):
         client_batch_hparams = client_batch_hparams,
         server_init_hparams = server_init_hparams,
         model = model,
-        vocab_embed_size = {'vocab_size': vocab_size+4, 'embed_size': embed_size},
+        vocab_embed_size = {'vocab_size': vocab_size+4, 'embed_size': embed_size, 'max_length': max_length},
         lipschitz_rounds = FLAGS.lipschitz_rounds,
     )
 
