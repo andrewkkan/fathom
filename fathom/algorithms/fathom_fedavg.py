@@ -106,12 +106,12 @@ def autoLip(
     The resulting L is the smoothness factor for convergence.
     '''
     if vocab_embed_size:
-        if vocab_embed_size['vocab_size'] == 10004: # stackoverflow
+        if vocab_embed_size['vocab_size'] == 10000: # stackoverflow
             _model: models.Model = fathom.models.stackoverflow.create_lstm_model_without_embedding(
                 vocab_size = vocab_embed_size['vocab_size'], 
                 embed_size = vocab_embed_size['embed_size'], 
             )
-        elif vocab_embed_size['vocab_size'] == 90: # shakespeare
+        elif vocab_embed_size['vocab_size'] == 86: # shakespeare
             _model: models.Model = fathom.models.shakespeare.create_lstm_model_without_embedding(
                 vocab_size = vocab_embed_size['vocab_size'], 
                 embed_size = vocab_embed_size['embed_size'], 
@@ -131,15 +131,17 @@ def autoLip(
         return - tree_util.tree_l2_norm(grad_loss)
     grad_grad_fn = jax.jit(jax.grad(grad_loss_l2_norm))
     lip_list = []
+    lip_key = jax.random.PRNGKey(17)
     for run in range(10): # Number of Monte Carlo trials
         # This outter loop should be parallelized using vmap or something, and jitted.
+        rng_key, lip_key = jax.random.split(lip_key)
         if img_dim:
-            vx = jax.random.normal(key = jax.random.PRNGKey(17), shape = img_dim['x']) * 0.15 + 0.5
+            vx = jax.random.normal(key = rng_key, shape = img_dim['x']) * 0.15 + 0.5
             vy = jnp.zeros(shape = img_dim['y'])
         elif vocab_embed_size:
             batch_size = 256
-            vx = jax.random.normal(key = jax.random.PRNGKey(17), shape = (vocab_embed_size['max_length'], batch_size, vocab_embed_size['embed_size'])) * 0.5
-            vy = jax.random.choice(a = vocab_embed_size['vocab_size'], size = (batch_size, vocab_embed_size['max_length']))
+            vx = jax.random.normal(key = rng_key, shape = (vocab_embed_size['max_length'], batch_size, vocab_embed_size['embed_size'])) * 0.5
+            vy = jax.random.choice(key = rng_key, a = vocab_embed_size['vocab_size']+4, shape = (batch_size, vocab_embed_size['max_length']))
         for idx in range(50): # Rough L estimation
             vx = grad_grad_fn(vx, vy)
             if float(jnp.square(vx).sum()) == 0.0:  # Numerical instability where vl lies outside of where gradients are available

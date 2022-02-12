@@ -117,7 +117,7 @@ def main(_):
         client_batch_hparams = client_batch_hparams,
         server_init_hparams = server_init_hparams,
         model = model,
-        vocab_embed_size = {'vocab_size': vocab_size+4, 'embed_size': embed_size, 'max_length': max_length},
+        vocab_embed_size = {'vocab_size': vocab_size, 'embed_size': embed_size, 'max_length': max_length},
         lipschitz_rounds = FLAGS.lipschitz_rounds,
     )
 
