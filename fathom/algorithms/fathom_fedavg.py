@@ -43,13 +43,13 @@ from fedjax.core.typing import BatchExample
 from fedjax.core.typing import Params, PyTree
 from fedjax.core.typing import PRNGKey
 from fedjax.core.typing import OptState, BatchExample
-
 import jax
 import jax.numpy as jnp
-
 import fathom
 
 Grads = Params
+
+Lambda_al = 0.0
 
 
 def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.Optimizer, model: models.Model):
@@ -92,6 +92,76 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
         return delta_params, client_step_state['min_hypergrad'], client_step_state['step_idx']
 
     return for_each_client.for_each_client(client_init, client_step, client_final)
+
+
+
+def autoLip(
+    params: Params, 
+    model: models.Model,
+    img_dim: Optional[Mapping[str, Tuple[int]]] = None,
+    vocab_embed_size: Optional[Mapping[str, int]] = None,
+) -> Union[jnp.ndarray, None]:
+    '''
+    Based on AutoLip (Algo 2) from "Lipschitz regularity of deep neural networks", arxiv:1805.10965.
+    Adapted to estimate Lipschitz of the gradient of the loss function vice the loss function.
+    The resulting L is the smoothness factor for convergence.
+    '''
+    if vocab_embed_size:
+        if vocab_embed_size['vocab_size'] == 10000: # stackoverflow
+            _model: models.Model = fathom.models.stackoverflow.create_lstm_model_without_embedding(
+                vocab_size = vocab_embed_size['vocab_size'], 
+                embed_size = vocab_embed_size['embed_size'], 
+            )
+        elif vocab_embed_size['vocab_size'] == 86: # shakespeare
+            _model: models.Model = fathom.models.shakespeare.create_lstm_model_without_embedding(
+                vocab_size = vocab_embed_size['vocab_size'], 
+                embed_size = vocab_embed_size['embed_size'], 
+            )
+    elif img_dim:
+        _model: models.Model = model
+    def loss(params: Params, v: BatchExample): 
+        preds = _model.apply_for_eval(params, v)
+        example_loss = _model.train_loss(v, preds)
+        return jnp.mean(example_loss)
+    grad_fn = jax.jit(jax.grad(loss))
+    def grad_loss_l2_norm(v_in: jnp.ndarray, v_out: jnp.ndarray):
+        v = {'x': v_in, 'y': v_out}
+        v0 = {'x': jnp.zeros_like(v_in), 'y': v_out}
+        grad_loss = grad_fn(params, v)
+        grad_loss0 = grad_fn(params, v0)
+        return - tree_util.tree_l2_norm(jax.tree_util.tree_multimap(jnp.subtract, grad_loss, grad_loss0)) + Lambda_al * jnp.sum(jnp.square(v_in))
+    grad_grad_fn = jax.jit(jax.grad(grad_loss_l2_norm))
+    lip_list = []
+    lip_key = jax.random.PRNGKey(17)
+    for run in range(10): # Number of Monte Carlo trials
+        # This outter loop should be parallelized using vmap or something, and jitted.
+        rng_key, lip_key = jax.random.split(lip_key)
+        if img_dim:
+            vx = jax.random.normal(key = rng_key, shape = img_dim['x']) * 0.15 + 0.5
+            vy = jnp.zeros(shape = img_dim['y'])
+        elif vocab_embed_size:
+            batch_size = 16
+            vx = jax.random.normal(key = rng_key, shape = (vocab_embed_size['max_length'], batch_size, vocab_embed_size['embed_size'])) * 0.5
+            vy = jax.random.choice(key = rng_key, a = vocab_embed_size['vocab_size']+4, shape = (batch_size, vocab_embed_size['max_length']))
+        for idx in range(50): # Rough L estimation
+            vx = grad_grad_fn(vx, vy)
+            if float(jnp.square(vx).sum()) == 0.0:  # Numerical instability where vl lies outside of where gradients are available
+                break
+            else:
+                vx = tree_util.tree_inverse_weight(vx, tree_util.tree_l2_norm(vx))
+        if float(jnp.square(vx).sum()) > 0.0:
+            v = {'x': vx, 'y': vy}
+            v0 = {'x': jnp.zeros_like(vx), 'y': vy}
+            grad_loss = grad_fn(params, v)
+            grad_loss0 = grad_fn(params, v0)
+            lip_list.append(tree_util.tree_l2_norm(jax.tree_util.tree_multimap(jnp.subtract, grad_loss, grad_loss0)))
+    if lip_list:
+        lip_sum = jnp.array(0.)
+        for v in lip_list:
+            lip_sum = lip_sum + v
+        return lip_sum / len(lip_list)
+    else:
+        return None
 
 
 @dataclasses.dataclass
@@ -256,6 +326,18 @@ def federated_averaging(
             server_state.opt_state, 
             server_state.params,
         )
+        autolip_out: Union[jnp.ndarray, None] = autoLip(params = params, model = model, img_dim = img_dim, vocab_embed_size = vocab_embed_size)
+        print(f"LIP = {autolip_out}")
+        if autolip_out is None:
+            hyperparams = Hyperparams(
+                eta_c = server_init_hparams.eta_c,
+                tau = server_init_hparams.tau,
+                bs = server_state.hyper_state.init_hparams.bs * 2.,
+                alpha = server_init_hparams.alpha,
+                eta_h = server_init_hparams.eta_h,
+                sigmoid_ub = server_init_hparams.sigmoid_ub,
+            )
+            return server_reset(server_state.params_bak, hyperparams)
         grad_glob: Params = estimate_grad_glob(server_state, mean_delta_params)
         hyper_state: HyperState = hyper_update(
             server_state = server_state, 

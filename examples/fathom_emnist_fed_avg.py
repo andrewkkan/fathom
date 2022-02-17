@@ -65,7 +65,7 @@ flags.DEFINE_float(
     'bs_ub', 20.0, 'Sigmoid upperbound for bs')
 
 flags.DEFINE_float(
-    'eta_c', 10**(-1), 'Init Client Learning Rate')
+    'eta_c', 10**(-1.5), 'Init Client Learning Rate')
 
 flags.DEFINE_integer(
     'batch_size', 1, 'Init Local Batch Size')
