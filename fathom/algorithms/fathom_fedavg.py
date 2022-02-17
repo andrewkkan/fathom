@@ -51,6 +51,9 @@ import fathom
 
 Grads = Params
 
+Lambda_al = 0.5
+Alpha_al = 0.9
+
 
 def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.Optimizer, model: models.Model):
     """Builds client_init, client_step, client_final for for_each_client."""
@@ -125,10 +128,12 @@ def autoLip(
         return jnp.mean(example_loss)
         # return - tree_util.tree_l2_norm(preds) 
     grad_fn = jax.jit(jax.grad(loss))
-    def grad_loss_l2_norm(v_in: BatchExample, v_out: BatchExample):
+    def grad_loss_l2_norm(v_in: jnp.ndarray, v_out: jnp.ndarray):
         v = {'x': v_in, 'y': v_out}
+        v0 = {'x': jnp.zeros_like(v_in), 'y': v_out}
         grad_loss = grad_fn(params, v)
-        return - tree_util.tree_l2_norm(grad_loss)
+        grad_loss0 = grad_fn(params, v0)
+        return - tree_util.tree_l2_norm(jax.tree_util.tree_multimap(jnp.subtract, grad_loss, grad_loss0)) + Lambda_al * jnp.sum(jnp.square(v_in))
     grad_grad_fn = jax.jit(jax.grad(grad_loss_l2_norm))
     lip_list = []
     lip_key = jax.random.PRNGKey(17)
@@ -139,7 +144,7 @@ def autoLip(
             vx = jax.random.normal(key = rng_key, shape = img_dim['x']) * 0.15 + 0.5
             vy = jnp.zeros(shape = img_dim['y'])
         elif vocab_embed_size:
-            batch_size = 256
+            batch_size = 16
             vx = jax.random.normal(key = rng_key, shape = (vocab_embed_size['max_length'], batch_size, vocab_embed_size['embed_size'])) * 0.5
             vy = jax.random.choice(key = rng_key, a = vocab_embed_size['vocab_size']+4, shape = (batch_size, vocab_embed_size['max_length']))
         for idx in range(50): # Rough L estimation
@@ -149,7 +154,11 @@ def autoLip(
             else:
                 vx = tree_util.tree_inverse_weight(vx, tree_util.tree_l2_norm(vx))
         if float(jnp.square(vx).sum()) > 0.0:
-            lip_list.append(tree_util.tree_l2_norm(grad_fn(params, {'x': vx, 'y': vy})))
+            v = {'x': vx, 'y': vy}
+            v0 = {'x': jnp.zeros_like(vx), 'y': vy}
+            grad_loss = grad_fn(params, v)
+            grad_loss0 = grad_fn(params, v0)
+            lip_list.append(tree_util.tree_l2_norm(jax.tree_util.tree_multimap(jnp.subtract, grad_loss, grad_loss0)))
     if lip_list:
         lip_sum = jnp.array(0.)
         for v in lip_list:
@@ -165,11 +174,11 @@ class Hyperparams:
     tau: float      # Number of local steps = ceil(local_samples / batch_size) * tau, where tau ~ num epochs worth of data.
     bs: float       # Local batch size
     alpha: float    # Momentum for glob grad estimation
-    eta_h: float    # Hyper optimizer learning rate
+    eta_h: jnp.ndarray    # Hyper optimizer learning rates
 
 
 @dataclasses.dataclass
-class MetaState:
+class HyperState:
     hyperparams: Hyperparams 
     init_hparams: Hyperparams
     opt_state: optimizers.OptState
@@ -177,6 +186,7 @@ class MetaState:
     phase: int # TBD
     hypergrad_glob: float
     hypergrad_local: float
+    lipschitz_bf: jnp.ndarray # < 0.0: not being used.  0.0: initialied value
 
 
 @dataclasses.dataclass
@@ -191,20 +201,18 @@ class ServerState:
     params_bak: Params
     opt_state: optimizers.OptState
     round_index: int
-    meta_state: MetaState
-    lipschitz_ub: Union[jnp.ndarray, None]
-    lipschitz_count: int
+    hyper_state: HyperState
     grad_glob: Params
 
 
 @jax.jit
 def estimate_grad_glob(server_state: ServerState, mean_delta_params: Params) -> Params:
-    grad_glob = tree_util.tree_weight(server_state.grad_glob, server_state.meta_state.hyperparams.alpha)
-    delta_params = tree_util.tree_weight(mean_delta_params, 1. - server_state.meta_state.hyperparams.alpha)
+    grad_glob = tree_util.tree_weight(server_state.grad_glob, server_state.hyper_state.hyperparams.alpha)
+    delta_params = tree_util.tree_weight(mean_delta_params, 1. - server_state.hyper_state.hyperparams.alpha)
     grad_glob = tree_util.tree_add(grad_glob, delta_params)
     grad_glob = fathom.core.tree_util.tree_inverse_weight(
         grad_glob, 
-        (1. - server_state.meta_state.hyperparams.alpha ** server_state.round_index)
+        (1. - server_state.hyper_state.hyperparams.alpha ** server_state.round_index)
     )
     return grad_glob
 
@@ -219,7 +227,6 @@ def federated_averaging(
         model: models.Model,
         img_dim: Optional[Mapping[str, Tuple[int]]] = None,
         vocab_embed_size: Optional[Mapping[str, int]] = None,
-        lipschitz_rounds: int = 0,
 ) -> federated_algorithm.FederatedAlgorithm:
     """Builds federated averaging.
 
@@ -239,7 +246,7 @@ def federated_averaging(
         opt_state_server = server_optimizer.init(params)
         opt_param_hyper = jnp.array([init_hparams.tau, init_hparams.eta_c, init_hparams.bs])
         opt_state_hyper = hyper_optimizer.init(opt_param_hyper)
-        meta_state = MetaState(
+        hyper_state = HyperState(
             hyperparams = init_hparams,
             init_hparams = init_hparams,
             opt_state = opt_state_hyper,
@@ -247,6 +254,7 @@ def federated_averaging(
             phase = 1,
             hypergrad_glob = 0.,
             hypergrad_local = 0.,
+            lipschitz_bf = 0.0, 
         )
         # Need to initialize round_index to 1 for bias comp
         return ServerState(
@@ -254,10 +262,8 @@ def federated_averaging(
             params_bak = params,
             opt_state = opt_state_server, 
             round_index = 1, 
-            lipschitz_ub = 0.0,
-            lipschitz_count = 0,
             grad_glob = tree_util.tree_zeros_like(params),
-            meta_state = meta_state,
+            hyper_state = hyper_state,
         )        
 
     def init(params: Params) -> ServerState:
@@ -272,13 +278,13 @@ def federated_averaging(
         ]],
     ) -> Tuple[ServerState, Mapping[federated_data.ClientId, Any]]:
         client_num_examples = {cid: len(cds) for cid, cds, _ in clients}
-        tau: float = server_state.meta_state.hyperparams.tau
-        bs: int = int(server_state.meta_state.hyperparams.bs)
-        eta_c: float = server_state.meta_state.hyperparams.eta_c
+        tau: float = server_state.hyper_state.hyperparams.tau
+        bs: int = int(server_state.hyper_state.hyperparams.bs)
+        eta_c: float = server_state.hyper_state.hyperparams.eta_c
         batch_clients = [(cid, cds.shuffle_repeat_batch(
             client_datasets.ShuffleRepeatBatchHParams(
-                batch_size = bs if tau > 0.0 else client_num_examples[cid], 
-                num_steps = int(max(1.0, jnp.ceil(tau * client_num_examples[cid] / bs))), 
+                batch_size = bs if server_state.hyper_state.phase == 1 else client_num_examples[cid], 
+                num_steps = int(jnp.ceil(tau * client_num_examples[cid] / bs)) if server_state.hyper_state.phase == 1 else 1, 
                 num_epochs = None, # This is required.  See ShuffleRepeatBatchView implementation in fedjax.core.client_datasets.py.
                 drop_remainder = client_batch_hparams.drop_remainder,
                 seed = client_batch_hparams.seed,
@@ -324,29 +330,22 @@ def federated_averaging(
             server_state.opt_state, 
             server_state.params,
         )
-        if server_state.lipschitz_count > lipschitz_rounds:
-            autolip_out, lipschitz_ub = 1.0, 1.0
-        else:
-            autolip_out: Union[jnp.ndarray, None] = autoLip(params = params, model = model, img_dim = img_dim, vocab_embed_size = vocab_embed_size)
-            print(f"LIP = {autolip_out}")
-            if autolip_out is None and server_state.lipschitz_ub is None:
-                hyperparams = Hyperparams(
-                    eta_c = server_init_hparams.eta_c,
-                    tau = server_init_hparams.tau, 
-                    bs = server_state.meta_state.init_hparams.bs * 2.,
-                    alpha = server_init_hparams.alpha,
-                    eta_h = server_init_hparams.eta_h,
-                ) 
-                return server_reset(server_state.params_bak, hyperparams)
-            elif autolip_out is None:
-                lipschitz_ub = max(4.0, server_state.lipschitz_ub * 2.0)
-            else:
-                lipschitz_ub = autolip_out
+        autolip_out: Union[jnp.ndarray, None] = autoLip(params = params, model = model, img_dim = img_dim, vocab_embed_size = vocab_embed_size)
+        print(f"LIP = {autolip_out}")
+        if autolip_out is None:
+            hyperparams = Hyperparams(
+                eta_c = server_init_hparams.eta_c,
+                tau = server_init_hparams.tau, 
+                bs = server_state.hyper_state.init_hparams.bs * 2.,
+                alpha = server_init_hparams.alpha,
+                eta_h = server_init_hparams.eta_h,
+            ) 
+            return server_reset(server_state.params_bak, hyperparams)
         grad_glob: Params = estimate_grad_glob(server_state, mean_delta_params)
-        meta_state: MetaState = hyper_update(
+        hyper_state: HyperState = hyper_update(
             server_state = server_state, 
             params = params, 
-            lipschitz_ub = lipschitz_ub, 
+            autolip_out = autolip_out, 
             delta_params = mean_delta_params,
             hypergrad_local = hypergrad_local,
         )
@@ -355,110 +354,76 @@ def federated_averaging(
             params_bak = server_state.params_bak, # Keep initial params rather than update
             opt_state = opt_state_server,
             round_index = server_state.round_index + 1,
-            meta_state = meta_state,
-            lipschitz_ub = autolip_out,
-            lipschitz_count = server_state.lipschitz_count + 1,
+            hyper_state = hyper_state,
             grad_glob = grad_glob,
         )
 
     def hyper_update(
         server_state: ServerState,
         params: Params,
-        lipschitz_ub: jnp.ndarray,
+        autolip_out: jnp.ndarray,
         delta_params: Params,
         hypergrad_local: jnp.ndarray,
-    ) -> MetaState:
+    ) -> HyperState:
 
         grad_glob = server_state.grad_glob # Do not use the most current grad_glob as the result will bias positive
         hypergrad_glob: float = fathom.core.tree_util.tree_dot(grad_glob, delta_params)
-        phase = jnp.where(server_state.meta_state.phase == 1,
-            # Transition criteria.  Lipschitz_ub needs to meet threshold to avoid noise from triggering an intended  
-            #   phase transition in the beginning rounds, before any meaningful features are learned in the NN.
-            jnp.where(server_state.meta_state.hyperparams.tau > 0.0 or lipschitz_ub < 5.0, 
-                1,
-                2
-            ),
-            # 1, # no transition for now
+        lipschitz_bf: jnp.ndarray = autolip_out * (1. - Alpha_al) + server_state.hyper_state.lipschitz_bf * Alpha_al
+        lipschitz_bc = lipschitz_bf / (1. - jnp.power(Alpha_al, server_state.round_index))
+
+        phase = jnp.where(server_state.hyper_state.phase == 1,
+            jnp.where(server_state.hyper_state.opt_param[0] > 0.0, 1, 2),
             2 
         )
-
-        # Use the actual hyperparam values instead of server_state.meta_state.opt_param, because
-        # we want the changes to take effect right away, versus, for example, learning rate that has
-        # adapted to exceed the max of 1/4L and that would take a while to come back below the max.
-        opt_param = jnp.array([ 
-            server_state.meta_state.hyperparams.tau, 
-            -jnp.log(1. / server_state.meta_state.hyperparams.eta_c - 1.),
-            server_state.meta_state.hyperparams.bs
-        ])
-        opt_state = server_state.meta_state.opt_state
+        opt_param = server_state.hyper_state.opt_param
+        opt_state = server_state.hyper_state.opt_state
         hypergrad = - jnp.array([
-            hypergrad_glob + hypergrad_local,
-            hypergrad_glob,
-            -hypergrad_local,
+            hypergrad_glob + hypergrad_local,   # tau
+            hypergrad_glob,                     # eta_c
+            -hypergrad_local,                   # bs
         ])
-        hypergrad = hypergrad * jnp.array([ # For activation functions if any
-            1.0,
-            jax.nn.sigmoid(opt_param[1]) * (1. - jax.nn.sigmoid(opt_param[1])),
-            1.0,
-        ])
-        hypergrad = hypergrad + jnp.array([ # Regularization if any
-            0., # Deprecated: server_state.meta_state.hyperparams.L * server_state.meta_state.hyperparams.tau,
-            0.,
-            0.,
-        ])
-
-        eta_h = jnp.where(phase == 1, # if
-            server_state.meta_state.hyperparams.eta_h, # then
-            0. # else
+        hypergrad = hypergrad * jnp.where(phase == 1, # This is where individual learning rates are applied, assuming opt is SGD.
+            server_state.hyper_state.hyperparams.eta_h, # This is an array of 3 eta_h's
+            jnp.zeros_like(server_state.hyper_state.hyperparams.eta_h)
         )
-        opt_state.hyperparams['learning_rate'] = eta_h 
         opt_state, opt_param = hyper_optimizer.apply(hypergrad, opt_state, opt_param)
 
         # Beware that hypergrads become really noisy or nonexistent during phase 2, so we may want to reduce reliance on them.
         tau = jnp.where(phase == 1, # if
-            jnp.where(opt_param[0] >= 1.0, # then-if
-                opt_param[0], # then
-                1.0 # else
-            ),
-            0. # Else.  Value 0 means 1 local step 
+            jax.nn.relu(opt_param[0] - 1.0) + 1.0,
+            0.0 # Else
         )
         eta_c = jnp.where(phase == 1, # if
-            # jnp.where(jax.nn.sigmoid(opt_param[1]) > 0.25 / lipschitz_ub, # then-if
-            #     0.25 / lipschitz_ub, # then
-            #     jax.nn.sigmoid(opt_param[1]) #else
-            # ),
-            jnp.where(server_state.lipschitz_count > lipschitz_rounds,
-                jax.nn.sigmoid(opt_param[1]),
-                0.25 / lipschitz_ub 
-            ),
-            jnp.where(server_state.meta_state.phase == 1, # else-if
-                server_state.meta_state.hyperparams.eta_c * 0.5 / 0.25, # Transition value for eta_c
-                server_state.meta_state.hyperparams.eta_c * server_state.round_index / (server_state.round_index + 1)          
+            jnp.where(opt_param[1] > 0.25 / lipschitz_bc,
+                0.25 / lipschitz_bc,
+                jax.nn.relu(opt_param[1]),
+            ), 
+            jnp.where(server_state.hyper_state.phase == 1, # else-if
+                server_state.hyper_state.hyperparams.eta_c * 0.5 / 0.25, # Transition value for eta_c
+                server_state.hyper_state.hyperparams.eta_c * server_state.round_index / (server_state.round_index + 1)          
             )
         )
         bs = jnp.where(phase == 1,
-            jnp.where(opt_param[2] >= 1.,
-                opt_param[2],
-                1.
-            ),
-            server_state.meta_state.hyperparams.bs * (server_state.round_index + 1) / server_state.round_index 
+            jax.nn.relu(opt_param[2] - 1.0) + 1.0,
+            server_state.hyper_state.hyperparams.bs * (server_state.round_index + 1) / server_state.round_index 
         )
         hyperparams = Hyperparams(
             eta_c = eta_c,
-            eta_h = eta_h,
+            eta_h = server_state.hyper_state.hyperparams.eta_h,
             tau = tau,
             bs = bs,
-            alpha = server_state.meta_state.hyperparams.alpha, 
+            alpha = server_state.hyper_state.hyperparams.alpha, 
         )
-        meta_state = MetaState(
+        hyper_state = HyperState(
             hyperparams = hyperparams,
-            init_hparams = server_state.meta_state.init_hparams,
+            init_hparams = server_state.hyper_state.init_hparams,
             opt_state = opt_state,
             opt_param = opt_param,
             phase = phase,
             hypergrad_glob = hypergrad_glob,
             hypergrad_local = hypergrad_local,
+            lipschitz_bf = lipschitz_bf,
         )        
-        return meta_state
+        return hyper_state
 
     return federated_algorithm.FederatedAlgorithm(init, apply)

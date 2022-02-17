@@ -49,10 +49,16 @@ flags.DEFINE_float(
     'alpha', 0.5, 'Momentum for global grad estimation.')
 
 flags.DEFINE_float(
-    'eta_h', 1.0, 'Init Hyper Learning Rate')
+    'eta_h', 0.5, 'Init Hyper Learning Rate for all')
+flags.DEFINE_float(
+    'eta_h0', 1.0, 'Init Hyper Learning Rate for tau')
+flags.DEFINE_float(
+    'eta_h1', 1.0, 'Init Hyper Learning Rate for eta_c')
+flags.DEFINE_float(
+    'eta_h2', 1.0, 'Init Hyper Learning Rate for bs')
 
 flags.DEFINE_float(
-    'eta_c', 10**(-1.5), 'Init Client Learning Rate')
+    'eta_c', 10**(-1), 'Init Client Learning Rate')
 
 flags.DEFINE_integer(
     'batch_size', 1, 'Init Local Batch Size')
@@ -65,9 +71,6 @@ flags.DEFINE_string(
 
 flags.DEFINE_integer(
     'clients_per_round', 10, 'Number of clients participating in federated learning in each round.')
-
-flags.DEFINE_integer(
-    'lipschitz_rounds', 10, 'Number of initial rounds to use Lipschitz estimator to set eta_c.')
 
 
 def main(_):
@@ -105,9 +108,9 @@ def main(_):
     # Create federated averaging algorithm.
     client_optimizer = fathom.optimizers.sgd(learning_rate = FLAGS.eta_c)
     # server_optimizer = fedjax.optimizers.adam(
-    #         learning_rate=10**(-2.5), b1=0.9, b2=0.999, eps=10**(-4))
+    #          learning_rate=10**(-1.5), b1=0.9, b2=0.999, eps=10**(-4))
     server_optimizer = fedjax.optimizers.sgd(learning_rate = 1.0) # Fed Avg
-    hyper_optimizer = fathom.optimizers.sgd(learning_rate = FLAGS.eta_h) 
+    hyper_optimizer = fedjax.optimizers.sgd(learning_rate = FLAGS.eta_h) # Individual learning rates are set separately.  SGD is required.
     # Hyperparameters for client local traing dataset preparation.
     client_batch_hparams = fedjax.ShuffleRepeatBatchHParams(
         batch_size = FLAGS.batch_size, # Ideally this is adaptive and not necessary but batch_size is required.
@@ -118,7 +121,7 @@ def main(_):
         tau = FLAGS.tau, # Initialize with 1 epoch's worth of data
         bs = float(FLAGS.batch_size),
         alpha = float(FLAGS.alpha),
-        eta_h = float(FLAGS.eta_h),
+        eta_h = jnp.array([FLAGS.eta_h0, FLAGS.eta_h1, FLAGS.eta_h2]),
     )
     data_dim = jax.tree_util.tree_map(lambda a: a[0:1].shape, test_fd.get_client(next(test_fd.client_ids())).all_examples())
     algorithm = fathom_fedavg.federated_averaging(
@@ -130,7 +133,6 @@ def main(_):
         server_init_hparams = server_init_hparams,
         model = model,
         img_dim = data_dim,
-        lipschitz_rounds = FLAGS.lipschitz_rounds,
     )
 
     # Initialize model parameters and algorithm server state.
@@ -177,8 +179,8 @@ def main(_):
                 test_eval_batches
             )
             print(f'[round {round_num}] train_metrics={train_metrics}')
-            print(f'[round {round_num}] eta_c={server_state.meta_state.hyperparams.eta_c}, tau={server_state.meta_state.hyperparams.tau}, bs={server_state.meta_state.hyperparams.bs}')
-            print(f'[round {round_num}] hypergrad_glob={server_state.meta_state.hypergrad_glob}, hypergrad_local={server_state.meta_state.hypergrad_local}')
+            print(f'[round {round_num}] eta_c={server_state.hyper_state.hyperparams.eta_c}, tau={server_state.hyper_state.hyperparams.tau}, bs={server_state.hyper_state.hyperparams.bs}')
+            print(f'[round {round_num}] hypergrad_glob={server_state.hyper_state.hypergrad_glob}, hypergrad_local={server_state.hyper_state.hypergrad_local}')
             print(f'[round {round_num}] test_metrics={test_metrics}')
 
     # Save final trained model parameters to file.
