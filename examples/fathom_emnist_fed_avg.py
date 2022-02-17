@@ -65,13 +65,11 @@ flags.DEFINE_float(
     'bs_ub', 20.0, 'Sigmoid upperbound for bs')
 
 flags.DEFINE_float(
+    'tau', 1.0, 'Init Num Epochs')
+flags.DEFINE_float(
     'eta_c', 10**(-1.5), 'Init Client Learning Rate')
-
 flags.DEFINE_integer(
     'batch_size', 1, 'Init Local Batch Size')
-
-flags.DEFINE_float(
-    'tau', 1.0, 'Init Num Epochs')
 
 flags.DEFINE_string(
     'model', 'CNN', 'CNN or MLP or AE')
@@ -79,8 +77,26 @@ flags.DEFINE_string(
 flags.DEFINE_integer(
     'clients_per_round', 10, 'Number of clients participating in federated learning in each round.')
 
+flags.DEFINE_boolean(
+    'use_autolip', True, 'Use AutoLip to detect fault in global model.  False means no fault detection.')
+
 
 def main(_):
+    print(f"FLAGS values:")
+    print(f"    --alpha {FLAGS.alpha}")
+    print(f"    --eta_h {FLAGS.eta_h}")
+    print(f"    --eta_h0 {FLAGS.eta_h0}")
+    print(f"    --eta_h1 {FLAGS.eta_h1}")
+    print(f"    --eta_h2 {FLAGS.eta_h2}")
+    print(f"    --tau_ub {FLAGS.tau_ub}")
+    print(f"    --eta_c_ub {FLAGS.eta_c_ub}")
+    print(f"    --bs_ub {FLAGS.bs_ub}")
+    print(f"    --tau {FLAGS.tau}")
+    print(f"    --eta_c {FLAGS.eta_c}")
+    print(f"    --batch_size {FLAGS.batch_size}")
+    print(f"    --model {FLAGS.model}")
+    print(f"    --clients_per_round {FLAGS.clients_per_round}")
+    print(f"    --use_autolip {FLAGS.use_autolip}")
     # We only use TensorFlow for datasets, so we restrict it to CPU only to avoid
     # issues with certain ops not being available on GPU/TPU.
     # It does not affect operations other than datasets.
@@ -141,6 +157,7 @@ def main(_):
         server_init_hparams = server_init_hparams,
         model = model,
         img_dim = data_dim,
+        use_autolip = FLAGS.use_autolip,
     )
 
     # Initialize model parameters and algorithm server state.

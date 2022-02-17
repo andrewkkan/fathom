@@ -223,6 +223,7 @@ def federated_averaging(
         model: models.Model,
         img_dim: Optional[Mapping[str, Tuple[int]]] = None,
         vocab_embed_size: Optional[Mapping[str, int]] = None,
+        use_autolip: bool = True,
 ) -> federated_algorithm.FederatedAlgorithm:
     """Builds federated averaging.
 
@@ -326,18 +327,19 @@ def federated_averaging(
             server_state.opt_state, 
             server_state.params,
         )
-        autolip_out: Union[jnp.ndarray, None] = autoLip(params = params, model = model, img_dim = img_dim, vocab_embed_size = vocab_embed_size)
-        print(f"LIP = {autolip_out}")
-        if autolip_out is None:
-            hyperparams = Hyperparams(
-                eta_c = server_init_hparams.eta_c,
-                tau = server_init_hparams.tau,
-                bs = server_state.hyper_state.init_hparams.bs * 2.,
-                alpha = server_init_hparams.alpha,
-                eta_h = server_init_hparams.eta_h,
-                sigmoid_ub = server_init_hparams.sigmoid_ub,
-            )
-            return server_reset(server_state.params_bak, hyperparams)
+        if use_autolip:
+            autolip_out: Union[jnp.ndarray, None] = autoLip(params = params, model = model, img_dim = img_dim, vocab_embed_size = vocab_embed_size)
+            print(f"LIP = {autolip_out}")
+            if autolip_out is None:
+                hyperparams = Hyperparams(
+                    eta_c = server_init_hparams.eta_c,
+                    tau = server_init_hparams.tau,
+                    bs = server_state.hyper_state.init_hparams.bs * 2.,
+                    alpha = server_init_hparams.alpha,
+                    eta_h = server_init_hparams.eta_h,
+                    sigmoid_ub = server_init_hparams.sigmoid_ub,
+                )
+                return server_reset(server_state.params_bak, hyperparams)
         grad_glob: Params = estimate_grad_glob(server_state, mean_delta_params)
         hyper_state: HyperState = hyper_update(
             server_state = server_state, 
