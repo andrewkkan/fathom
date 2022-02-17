@@ -49,13 +49,20 @@ flags.DEFINE_float(
     'alpha', 0.5, 'Momentum for global grad estimation.')
 
 flags.DEFINE_float(
-    'eta_h', 0.5, 'Init Hyper Learning Rate for all')
+    'eta_h', 1.0, 'Init Hyper Learning Rate for all')
 flags.DEFINE_float(
-    'eta_h0', 1.0, 'Init Hyper Learning Rate for tau')
+    'eta_h0', 10.0, 'Init Hyper Learning Rate for tau')
 flags.DEFINE_float(
-    'eta_h1', 1.0, 'Init Hyper Learning Rate for eta_c')
+    'eta_h1', 0.1, 'Init Hyper Learning Rate for eta_c')
 flags.DEFINE_float(
-    'eta_h2', 1.0, 'Init Hyper Learning Rate for bs')
+    'eta_h2', 20.0, 'Init Hyper Learning Rate for bs')
+
+flags.DEFINE_float(
+    'tau_ub', 10.0, 'Sigmoid upperbound for tau')
+flags.DEFINE_float(
+    'eta_c_ub', 0.1, 'Sigmoid upperbound for eta_c')
+flags.DEFINE_float(
+    'bs_ub', 20.0, 'Sigmoid upperbound for bs')
 
 flags.DEFINE_float(
     'eta_c', 10**(-1), 'Init Client Learning Rate')
@@ -122,6 +129,7 @@ def main(_):
         bs = float(FLAGS.batch_size),
         alpha = float(FLAGS.alpha),
         eta_h = jnp.array([FLAGS.eta_h0, FLAGS.eta_h1, FLAGS.eta_h2]),
+        sigmoid_ub = jnp.array([FLAGS.tau_ub, FLAGS.eta_c_ub, FLAGS.bs_ub]),
     )
     data_dim = jax.tree_util.tree_map(lambda a: a[0:1].shape, test_fd.get_client(next(test_fd.client_ids())).all_examples())
     algorithm = fathom_fedavg.federated_averaging(
