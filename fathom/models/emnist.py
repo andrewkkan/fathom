@@ -38,55 +38,55 @@ _EVAL_METRICS_AUTOENCODER = {
 }
 
 def create_mlp_model(only_digits: bool = False) -> models.Model:
-  """ MLP model used in https://arxiv.org/abs/2008.03606.
-      2 hidden layer (300u-100) MLP  
-  """ 
-  num_classes = 10 if only_digits else 62
+    """ MLP model used in https://arxiv.org/abs/2008.03606.
+            2 hidden layer (300u-100) MLP  
+    """ 
+    num_classes = 10 if only_digits else 62
 
-  def forward_pass(batch):
-    network = hk.Sequential([
-        hk.Flatten(),
-        hk.Linear(300),
-        jax.nn.relu,
-        hk.Linear(100),
-        jax.nn.relu,
-        hk.Linear(num_classes),
-    ])
-    return network(batch['x'])
+    def forward_pass(batch):
+        network = hk.Sequential([
+            hk.Flatten(),
+            hk.Linear(300),
+            jax.nn.relu,
+            hk.Linear(100),
+            jax.nn.relu,
+            hk.Linear(num_classes),
+        ])
+        return network(batch['x'])
 
-  transformed_forward_pass = hk.transform(forward_pass)
-  return models.create_model_from_haiku(
-      transformed_forward_pass=transformed_forward_pass,
-      sample_batch=_HAIKU_SAMPLE_BATCH,
-      train_loss=_TRAIN_LOSS_CLASSIFIER,
-      eval_metrics=_EVAL_METRICS_CLASSIFIER)
+    transformed_forward_pass = hk.transform(forward_pass)
+    return models.create_model_from_haiku(
+        transformed_forward_pass=transformed_forward_pass,
+        sample_batch=_HAIKU_SAMPLE_BATCH,
+        train_loss=_TRAIN_LOSS_CLASSIFIER,
+        eval_metrics=_EVAL_METRICS_CLASSIFIER)
 
 def create_autoencoder_model() -> models.Model:
-  """ AE model used in https://arxiv.org/abs/2003.00295 """ 
-  def forward_pass(batch):
-    network = hk.Sequential([
-        hk.Flatten(),
-        hk.Linear(1000),
-        jax.nn.sigmoid,
-        hk.Linear(500),
-        jax.nn.sigmoid,
-        hk.Linear(250),
-        jax.nn.sigmoid,
-        hk.Linear(30),
-        jax.nn.sigmoid,
-        hk.Linear(250),
-        jax.nn.sigmoid,
-        hk.Linear(500),
-        jax.nn.sigmoid,
-        hk.Linear(1000),
-        jax.nn.sigmoid,
-        hk.Linear(784),
-    ])
-    return network(batch['x'])
+    """ AE model used in https://arxiv.org/abs/2003.00295 """ 
+    def forward_pass(batch):
+        network = hk.Sequential([
+            hk.Flatten(),
+            hk.Linear(1000),
+            jax.nn.sigmoid,
+            hk.Linear(500),
+            jax.nn.sigmoid,
+            hk.Linear(250),
+            jax.nn.sigmoid,
+            hk.Linear(30),
+            jax.nn.sigmoid,
+            hk.Linear(250),
+            jax.nn.sigmoid,
+            hk.Linear(500),
+            jax.nn.sigmoid,
+            hk.Linear(1000),
+            jax.nn.sigmoid,
+            hk.Linear(784),
+        ])
+        return network(batch['x'])
 
-  transformed_forward_pass = hk.transform(forward_pass)
-  return models.create_model_from_haiku(
-      transformed_forward_pass=transformed_forward_pass,
-      sample_batch=_HAIKU_SAMPLE_BATCH,
-      train_loss=_TRAIN_LOSS_AUTOENCODER,
-      eval_metrics=_EVAL_METRICS_AUTOENCODER)
+    transformed_forward_pass = hk.transform(forward_pass)
+    return models.create_model_from_haiku(
+        transformed_forward_pass=transformed_forward_pass,
+        sample_batch=_HAIKU_SAMPLE_BATCH,
+        train_loss=_TRAIN_LOSS_AUTOENCODER,
+        eval_metrics=_EVAL_METRICS_AUTOENCODER)

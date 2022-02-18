@@ -11,9 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Model implementations for FedJAX experimental API."""
+"""fedjax datasets."""
 
-from fathom.models import emnist
-from fathom.models import shakespeare
-from fathom.models import stackoverflow
-from fathom.models import cifar100
+from fathom.datasets import cifar100
+

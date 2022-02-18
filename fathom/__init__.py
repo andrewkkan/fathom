@@ -4,3 +4,4 @@ from fathom.core import metrics
 
 # Subpackages available by default.
 from fathom import models
+from fathom import datasets

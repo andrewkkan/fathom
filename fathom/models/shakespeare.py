@@ -88,28 +88,28 @@ def create_lstm_model_without_embedding(vocab_size: int = 86,
 
     transformed_forward_pass = hk.transform(forward_pass)
     return models.create_model_from_haiku(
-            transformed_forward_pass=transformed_forward_pass,
-            sample_batch={
-                'x': jnp.zeros((1, 1), dtype=jnp.int32),
-                'y': jnp.zeros((1, 1), dtype=jnp.int32),
-            },
-            train_loss=train_loss,
-            eval_metrics={
-                'accuracy_in_vocab':
-                        metrics.SequenceTokenAccuracy(
-                                masked_target_values=(pad, eos), logits_mask=logits_mask),
-                'accuracy_no_eos':
-                        metrics.SequenceTokenAccuracy(masked_target_values=(pad, eos)),
-                'num_tokens':
-                        metrics.SequenceTokenCount(masked_target_values=(pad,)),
-                'sequence_length':
-                        metrics.SequenceLength(masked_target_values=(pad,)),
-                'sequence_loss':
-                        metrics.SequenceCrossEntropyLoss(masked_target_values=(pad,)),
-                'token_loss':
-                        metrics.SequenceTokenCrossEntropyLoss(
-                                masked_target_values=(pad,)),
-                'token_oov_rate':
-                        metrics.SequenceTokenOOVRate(
-                                oov_target_values=(oov,), masked_target_values=(pad,)),
-            })
+        transformed_forward_pass=transformed_forward_pass,
+        sample_batch={
+            'x': jnp.zeros((1, 1), dtype=jnp.int32),
+            'y': jnp.zeros((1, 1), dtype=jnp.int32),
+        },
+        train_loss=train_loss,
+        eval_metrics={
+            'accuracy_in_vocab':
+                metrics.SequenceTokenAccuracy(
+                    masked_target_values=(pad, eos), logits_mask=logits_mask),
+            'accuracy_no_eos':
+                metrics.SequenceTokenAccuracy(masked_target_values=(pad, eos)),
+            'num_tokens':
+                metrics.SequenceTokenCount(masked_target_values=(pad,)),
+            'sequence_length':
+                metrics.SequenceLength(masked_target_values=(pad,)),
+            'sequence_loss':
+                metrics.SequenceCrossEntropyLoss(masked_target_values=(pad,)),
+            'token_loss':
+                metrics.SequenceTokenCrossEntropyLoss(
+                    masked_target_values=(pad,)),
+            'token_oov_rate':
+                metrics.SequenceTokenOOVRate(
+                    oov_target_values=(oov,), masked_target_values=(pad,)),
+        })
