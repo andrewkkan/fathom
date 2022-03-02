@@ -31,7 +31,7 @@ from fedjax.core import models
 
 import fathom
 from fathom.algorithms import fathom_fedavg
-from fathom.algorithms.fathom_fedavg import Hyperparams
+from fathom.algorithms.fathom_fedavg import HyperParams, AutoLipParams
 
 import jax
 import jax.numpy as jnp
@@ -43,7 +43,7 @@ from jax.config import config
 FLAGS = flags.FLAGS
 
 flags.DEFINE_integer(
-    'sim_rounds', 1501, 'Total number of rounds for sim run.')
+    'sim_rounds', 4001, 'Total number of rounds for sim run.')
 
 flags.DEFINE_float(
     'alpha', 0.5, 'Momentum for global grad estimation.')
@@ -76,6 +76,8 @@ flags.DEFINE_integer(
 
 flags.DEFINE_boolean(
     'use_autolip', True, 'Use AutoLip to detect fault in global model.  False means no fault detection.')
+flags.DEFINE_float(
+    'autolip_lambda', 0.0, 'Regularization factor for AutoLip.')
 
 
 def main(_):
@@ -93,6 +95,7 @@ def main(_):
     print(f"    --batch_size {FLAGS.batch_size}")
     print(f"    --clients_per_round {FLAGS.clients_per_round}")
     print(f"    --use_autolip {FLAGS.use_autolip}")
+    print(f"    --autolip_lambda {FLAGS.autolip_lambda}")
     # We only use TensorFlow for datasets, so we restrict it to CPU only to avoid
     # issues with certain ops not being available on GPU/TPU.
     # It does not affect operations other than datasets.
@@ -126,13 +129,17 @@ def main(_):
         batch_size = FLAGS.batch_size, # Ideally this is adaptive and not necessary but batch_size is required.
         seed = jax.random.PRNGKey(17),
     )
-    server_init_hparams: Hyperparams = Hyperparams(
+    server_init_hparams: HyperParams = HyperParams(
         eta_c = float(FLAGS.eta_c),
         tau = FLAGS.tau, # Initialize with 1 epoch's worth of data
         bs = float(FLAGS.batch_size),
         alpha = float(FLAGS.alpha),
         eta_h = jnp.array([FLAGS.eta_h0, FLAGS.eta_h1, FLAGS.eta_h2]),
         sigmoid_ub = jnp.array([FLAGS.tau_ub, FLAGS.eta_c_ub, FLAGS.bs_ub]),
+    )
+    autolip_params: AutoLipParams = AutoLipParams(
+        use = FLAGS.use_autolip,
+        lamb = FLAGS.autolip_lambda,
     )
     data_dim = jax.tree_util.tree_map(lambda a: a[0:1].shape, test_fd.get_client(next(test_fd.client_ids())).all_examples())
     algorithm = fathom_fedavg.federated_averaging(
@@ -144,7 +151,7 @@ def main(_):
         server_init_hparams = server_init_hparams,
         model = model,
         img_dim = data_dim,
-        use_autolip = FLAGS.use_autolip,
+        autolip_params = autolip_params,
     )
 
     # Initialize model parameters and algorithm server state.

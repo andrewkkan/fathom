@@ -49,8 +49,6 @@ import fathom
 
 Grads = Params
 
-Lambda_al = 0.0
-
 
 def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.Optimizer, model: models.Model):
     """Builds client_init, client_step, client_final for for_each_client."""
@@ -94,10 +92,15 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
     return for_each_client.for_each_client(client_init, client_step, client_final)
 
 
+@dataclasses.dataclass
+class AutoLipParams:
+    use: bool
+    lamb: float
 
 def autoLip(
     params: Params, 
     model: models.Model,
+    lamb: float,
     img_dim: Optional[Mapping[str, Tuple[int]]] = None,
     vocab_embed_size: Optional[Mapping[str, int]] = None,
 ) -> Union[jnp.ndarray, None]:
@@ -129,7 +132,7 @@ def autoLip(
         v0 = {'x': jnp.zeros_like(v_in), 'y': v_out}
         grad_loss = grad_fn(params, v)
         grad_loss0 = grad_fn(params, v0)
-        return - tree_util.tree_l2_norm(jax.tree_util.tree_multimap(jnp.subtract, grad_loss, grad_loss0)) + Lambda_al * jnp.sum(jnp.square(v_in))
+        return - tree_util.tree_l2_norm(jax.tree_util.tree_multimap(jnp.subtract, grad_loss, grad_loss0)) + lamb * jnp.sum(jnp.square(v_in))
     grad_grad_fn = jax.jit(jax.grad(grad_loss_l2_norm))
     lip_list = []
     lip_key = jax.random.PRNGKey(17)
@@ -165,7 +168,7 @@ def autoLip(
 
 
 @dataclasses.dataclass
-class Hyperparams:
+class HyperParams:
     eta_c: float                # Local learning rate or step size
     tau: float                  # Number of local steps = ceil(local_samples / batch_size) * tau, where tau ~ num epochs worth of data.
     bs: float                   # Local batch size
@@ -176,8 +179,8 @@ class Hyperparams:
 
 @dataclasses.dataclass
 class HyperState:
-    hyperparams: Hyperparams 
-    init_hparams: Hyperparams
+    hyperparams: HyperParams 
+    init_hparams: HyperParams
     opt_state: optimizers.OptState
     opt_param: jnp.ndarray
     phase: int # TBD
@@ -219,11 +222,11 @@ def federated_averaging(
         server_optimizer: optimizers.Optimizer,
         hyper_optimizer: optimizers.Optimizer,
         client_batch_hparams: client_datasets.ShuffleRepeatBatchHParams,
-        server_init_hparams: Hyperparams,
+        server_init_hparams: HyperParams,
         model: models.Model,
         img_dim: Optional[Mapping[str, Tuple[int]]] = None,
         vocab_embed_size: Optional[Mapping[str, int]] = None,
-        use_autolip: bool = True,
+        autolip_params: Optional[AutoLipParams] = None,
 ) -> federated_algorithm.FederatedAlgorithm:
     """Builds federated averaging.
 
@@ -239,7 +242,7 @@ def federated_averaging(
     """
     train_for_each_client = create_train_for_each_client(grad_fn, client_optimizer, model)
 
-    def server_reset(params: Params, init_hparams: Hyperparams) -> ServerState:
+    def server_reset(params: Params, init_hparams: HyperParams) -> ServerState:
         opt_state_server = server_optimizer.init(params)
         opt_param_hyper = -jnp.log(init_hparams.sigmoid_ub / jnp.array([
             init_hparams.tau, init_hparams.eta_c, init_hparams.bs]) - 1) * init_hparams.sigmoid_ub
@@ -327,11 +330,17 @@ def federated_averaging(
             server_state.opt_state, 
             server_state.params,
         )
-        if use_autolip:
-            autolip_out: Union[jnp.ndarray, None] = autoLip(params = params, model = model, img_dim = img_dim, vocab_embed_size = vocab_embed_size)
+        if autolip_params is not None and autolip_params.use:
+            autolip_out: Union[jnp.ndarray, None] = autoLip(
+                params = params, 
+                model = model, 
+                lamb = autolip_params.lamb, 
+                img_dim = img_dim, 
+                vocab_embed_size = vocab_embed_size
+            )
             print(f"LIP = {autolip_out}")
             if autolip_out is None:
-                hyperparams = Hyperparams(
+                hyperparams = HyperParams(
                     eta_c = server_init_hparams.eta_c,
                     tau = server_init_hparams.tau,
                     bs = server_state.hyper_state.init_hparams.bs * 2.,
@@ -401,7 +410,7 @@ def federated_averaging(
             hparams_vals[2],
             server_state.hyper_state.hyperparams.bs * (server_state.round_index + 1) / server_state.round_index 
         )
-        hyperparams = Hyperparams(
+        hyperparams = HyperParams(
             tau = tau,
             eta_c = eta_c,
             bs = bs,
