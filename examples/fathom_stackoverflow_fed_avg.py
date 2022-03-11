@@ -31,7 +31,7 @@ from fedjax.core import models
 
 import fathom
 from fathom.algorithms import fathom_fedavg
-from fathom.algorithms.fathom_fedavg import HyperParams, AutoLipParams
+from fathom.algorithms.fathom_fedavg import HyperParams, AutoLipParams, FathomParams
 
 import jax
 import jax.numpy as jnp
@@ -79,6 +79,16 @@ flags.DEFINE_boolean(
 flags.DEFINE_float(
     'autolip_lambda', 0.0, 'Regularization factor for AutoLip.')
 
+# hyper_update can be one of the following:
+# HPL = Hypergradient Linear
+# HPM = Hypergradient Multiplicative 
+# EGU = Exponentiated Gradient Unnormalized
+# EGN = Exponentiated Gradient Normalized
+flags.DEFINE_string(
+    'hyper_update', 'HPL', 'HPL, HPM, EGU, or EGN')
+flags.register_validator('hyper_update',
+                         lambda value: 'HPL' in value or 'HPM' in value or 'EGU' in value or 'EGN' in value,
+                         message='--hyper_update must be HPL, HPM, EGU, or EGN')
 
 def main(_):
     print(f"FLAGS values:")
@@ -96,6 +106,7 @@ def main(_):
     print(f"    --clients_per_round {FLAGS.clients_per_round}")
     print(f"    --use_autolip {FLAGS.use_autolip}")
     print(f"    --autolip_lambda {FLAGS.autolip_lambda}")
+    print(f"    --hyper_update {FLAGS.hyper_update}")
     # We only use TensorFlow for datasets, so we restrict it to CPU only to avoid
     # issues with certain ops not being available on GPU/TPU.
     # It does not affect operations other than datasets.
@@ -149,6 +160,9 @@ def main(_):
         use = FLAGS.use_autolip,
         lamb = FLAGS.autolip_lambda,
     )
+    fathom_params: FathomParams = FathomParams(
+        update_type = FLAGS.hyper_update,
+    )
     algorithm = fathom_fedavg.federated_averaging(
         grad_fn = grad_fn, 
         client_optimizer = client_optimizer,
@@ -159,6 +173,7 @@ def main(_):
         model = model,
         vocab_embed_size = {'vocab_size': vocab_size, 'embed_size': embed_size, 'max_length': max_length},
         autolip_params = autolip_params,
+        fathom_params = fathom_params,
     )
 
     # Initialize model parameters and algorithm server state.

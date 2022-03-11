@@ -50,8 +50,21 @@ import fathom
 Grads = Params
 
 
-def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.Optimizer, model: models.Model):
+
+
+@dataclasses.dataclass
+class FathomParams:
+    # update_type can be one of the following:
+    # HPL = Hypergradient Linear
+    # HPM = Hypergradient Multiplicative 
+    # EGU = Exponentiated Gradient Unnormalized
+    # EGN = Exponentiated Gradient Normalized
+    update_type: str            # HPL, HPM, EGU, or EGN
+
+def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.Optimizer, model: models.Model, fathom_params: FathomParams):
     """Builds client_init, client_step, client_final for for_each_client."""
+    normalize_hypergrad = 0 if fathom_params is None or 'HPL' in fathom_params.update_type or \
+        'EGU' in fathom_params.update_type else 1
 
     def client_init(shared_input, client_rng):
         opt_state = client_optimizer.init(shared_input['params'])
@@ -71,7 +84,15 @@ def create_train_for_each_client(grad_fn: Params, client_optimizer: optimizers.O
         grad_opt = grad_fn(client_step_state['params'], batch, use_rng)
         opt_state, params = client_optimizer.apply(grad_opt, client_step_state['opt_state'], client_step_state['params'])
         delta_params = jax.tree_util.tree_multimap(jnp.subtract, client_step_state['params0'], params)
-        hypergrad = fathom.core.tree_util.tree_dot(grad_opt, delta_params) 
+        grad_opt_norm = tree_util.tree_l2_norm(grad_opt)
+        delta_params_norm = tree_util.tree_l2_norm(delta_params)
+        hypergrad = jnp.where(grad_opt_norm == 0., jnp.array(0),
+            jnp.where(delta_params_norm == 0, jnp.array(0),
+                jnp.where(normalize_hypergrad == 0 ,
+                    fathom.core.tree_util.tree_dot(grad_opt, delta_params),
+                    fathom.core.tree_util.tree_dot(grad_opt, delta_params) / grad_opt_norm / delta_params_norm)
+            )
+        )
         min_hypergrad = jnp.where(hypergrad > client_step_state['min_hypergrad'],
             client_step_state['min_hypergrad'], hypergrad
         )
@@ -227,6 +248,7 @@ def federated_averaging(
         img_dim: Optional[Mapping[str, Tuple[int]]] = None,
         vocab_embed_size: Optional[Mapping[str, int]] = None,
         autolip_params: Optional[AutoLipParams] = None,
+        fathom_params: Optional[FathomParams] = None,
 ) -> federated_algorithm.FederatedAlgorithm:
     """Builds federated averaging.
 
@@ -240,13 +262,16 @@ def federated_averaging(
     Returns:
         FederatedAlgorithm
     """
-    train_for_each_client = create_train_for_each_client(grad_fn, client_optimizer, model)
+    train_for_each_client = create_train_for_each_client(grad_fn, client_optimizer, model, fathom_params)
 
     def server_reset(params: Params, init_hparams: HyperParams) -> ServerState:
         opt_state_server = server_optimizer.init(params)
         opt_param_hyper = -jnp.log(init_hparams.sigmoid_ub / jnp.array([
             init_hparams.tau, init_hparams.eta_c, init_hparams.bs]) - 1) * init_hparams.sigmoid_ub
-        opt_state_hyper = hyper_optimizer.init(opt_param_hyper)
+        if fathom_params is None or 'HPL' in fathom_params.update_type or 'HPM' in fathom_params.update_type:
+            opt_state_hyper = hyper_optimizer.init(opt_param_hyper)
+        elif 'EGU' in fathom_params.update_type or 'EGN' in fathom_params.update_type:
+            opt_state_hyper = hyper_optimizer.init(jnp.log(opt_param_hyper))
         hyper_state = HyperState(
             hyperparams = init_hparams,
             init_hparams = init_hparams,
@@ -309,7 +334,7 @@ def federated_averaging(
             # We record the l2 norm of client updates as an example, but it is not
             # required for the algorithm.
             client_diagnostics[client_id] = {
-                    'delta_l2_norm': tree_util.tree_l2_norm(delta_params),
+                'delta_l2_norm': tree_util.tree_l2_norm(delta_params),
             }
         mean_delta_params = fathom.core.tree_util.tree_inverse_weight(delta_params_sum, num_examples_sum)
         mean_hypergrad_local = hypergrad_local_sum / num_examples_sum
@@ -375,6 +400,13 @@ def federated_averaging(
         opt_param, opt_state = server_state.hyper_state.opt_param, server_state.hyper_state.opt_state
         # Do not use the most current grad_glob as the result will bias positive
         hypergrad_glob: float = fathom.core.tree_util.tree_dot(server_state.grad_glob, delta_params)
+        if 'HPM' in fathom_params.update_type or 'EGN' in fathom_params.update_type:
+            # hypergrad_local already normalized from local calculations
+            grad_glob_norm = tree_util.tree_l2_norm(server_state.grad_glob)
+            delta_params_norm = tree_util.tree_l2_norm(delta_params)
+            hypergrad_glob = jnp.where((grad_glob_norm > 0. and delta_params_norm > 0.),
+                hypergrad_glob / grad_glob_norm / delta_params_norm,
+                0)
         hypergrad = - jnp.array([
             hypergrad_glob + hypergrad_local,   # tau
             hypergrad_glob,                     # eta_c
@@ -388,8 +420,25 @@ def federated_averaging(
             jnp.zeros_like(server_state.hyper_state.hyperparams.eta_h)
         )
         opt_state, opt_param = hyper_optimizer.apply(hypergrad, opt_state, opt_param)
-        hparams_vals = jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.sigmoid_ub) \
-            * server_state.hyper_state.hyperparams.sigmoid_ub
+
+        if fathom_params is None or 'HPL' in fathom_params.update_type:
+            opt_state, opt_param = hyper_optimizer.apply(hypergrad, opt_state, opt_param)
+            hparams_vals = jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.sigmoid_ub) \
+                * server_state.hyper_state.hyperparams.sigmoid_ub
+        elif 'HPM' in fathom_params.update_type:
+            hparams_vals = jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.sigmoid_ub) \
+                * server_state.hyper_state.hyperparams.sigmoid_ub
+            hypergrad = hypergrad * hparams_vals
+            opt_state, opt_param = hyper_optimizer.apply(hypergrad, opt_state, opt_param)
+            hparams_vals = jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.sigmoid_ub) \
+                * server_state.hyper_state.hyperparams.sigmoid_ub
+        elif 'EGU' in fathom_params.update_type or 'EGN' in fathom_params.update_type:
+            # EGN gradients are already normalized
+            opt_state, opt_param = hyper_optimizer.apply(hypergrad, opt_state, opt_param)
+            opt_param_linear = jnp.exp(opt_param) # Convert back to linear from log 
+            hparams_vals = jax.nn.sigmoid(opt_param_linear / server_state.hyper_state.hyperparams.sigmoid_ub) \
+                * server_state.hyper_state.hyperparams.sigmoid_ub
+
         phase = jnp.where(server_state.hyper_state.phase == 1,
             jnp.where(hparams_vals[0] > 0.5, 1, 2),
             2 
