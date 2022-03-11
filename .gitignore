@@ -22,5 +22,5 @@ jax.iml
 build/
 .git*
 *.log
-runme*
+run*
 

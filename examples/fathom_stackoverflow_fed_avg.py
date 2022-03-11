@@ -58,11 +58,11 @@ flags.DEFINE_float(
     'eta_h2', 20.0, 'Init Hyper Learning Rate for bs')
 
 flags.DEFINE_float(
-    'tau_ub', 10.0, 'Sigmoid upperbound for tau')
+    'tau_ub', 10.0, 'Upperbound value for tau')
 flags.DEFINE_float(
-    'eta_c_ub', 2.0, 'Sigmoid upperbound for eta_c')
+    'eta_c_ub', 2.0, 'Upperbound value for eta_c')
 flags.DEFINE_float(
-    'bs_ub', 20.0, 'Sigmoid upperbound for bs')
+    'bs_ub', 20.0, 'Upperbound value for bs')
 
 flags.DEFINE_float(
     'eta_c', 10**(-1), 'Init Client Learning Rate')
@@ -154,7 +154,7 @@ def main(_):
         bs = float(FLAGS.batch_size),
         alpha = float(FLAGS.alpha),
         eta_h = jnp.array([FLAGS.eta_h0, FLAGS.eta_h1, FLAGS.eta_h2]),
-        sigmoid_ub = jnp.array([FLAGS.tau_ub, FLAGS.eta_c_ub, FLAGS.bs_ub]),
+        hparam_ub = jnp.array([FLAGS.tau_ub, FLAGS.eta_c_ub, FLAGS.bs_ub]),
     )
     autolip_params: AutoLipParams = AutoLipParams(
         use = FLAGS.use_autolip,

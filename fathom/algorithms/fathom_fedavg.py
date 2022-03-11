@@ -195,7 +195,7 @@ class HyperParams:
     bs: float                   # Local batch size
     alpha: float                # Momentum for glob grad estimation
     eta_h: jnp.ndarray          # Hyper optimizer learning rates for tau, eta_c, and bs, respectively
-    sigmoid_ub: jnp.ndarray     # Sigmoid upperbound for tau, eta_c, and bs, respectively
+    hparam_ub: jnp.ndarray      # Upperbound vals for tau, eta_c, and bs, respectively.
 
 
 @dataclasses.dataclass
@@ -266,12 +266,13 @@ def federated_averaging(
 
     def server_reset(params: Params, init_hparams: HyperParams) -> ServerState:
         opt_state_server = server_optimizer.init(params)
-        opt_param_hyper = -jnp.log(init_hparams.sigmoid_ub / jnp.array([
-            init_hparams.tau, init_hparams.eta_c, init_hparams.bs]) - 1) * init_hparams.sigmoid_ub
         if fathom_params is None or 'HPL' in fathom_params.update_type or 'HPM' in fathom_params.update_type:
+            opt_param_hyper = -jnp.log(init_hparams.hparam_ub / jnp.array([
+                init_hparams.tau, init_hparams.eta_c, init_hparams.bs]) - 1) * init_hparams.hparam_ub
             opt_state_hyper = hyper_optimizer.init(opt_param_hyper)
         elif 'EGU' in fathom_params.update_type or 'EGN' in fathom_params.update_type:
-            opt_state_hyper = hyper_optimizer.init(jnp.log(opt_param_hyper))
+            opt_param_hyper = jnp.log(jnp.array([init_hparams.tau, init_hparams.eta_c, init_hparams.bs]))
+            opt_state_hyper = hyper_optimizer.init(opt_param_hyper)
         hyper_state = HyperState(
             hyperparams = init_hparams,
             init_hparams = init_hparams,
@@ -371,7 +372,7 @@ def federated_averaging(
                     bs = server_state.hyper_state.init_hparams.bs * 2.,
                     alpha = server_init_hparams.alpha,
                     eta_h = server_init_hparams.eta_h,
-                    sigmoid_ub = server_init_hparams.sigmoid_ub,
+                    hparam_ub = server_init_hparams.hparam_ub,
                 )
                 return server_reset(server_state.params_bak, hyperparams)
         grad_glob: Params = estimate_grad_glob(server_state, mean_delta_params)
@@ -401,18 +402,22 @@ def federated_averaging(
         # Do not use the most current grad_glob as the result will bias positive
         hypergrad_glob: float = fathom.core.tree_util.tree_dot(server_state.grad_glob, delta_params)
         if 'HPM' in fathom_params.update_type or 'EGN' in fathom_params.update_type:
+            # Normalizing hypergrad_global here
             # hypergrad_local already normalized from local calculations
             grad_glob_norm = tree_util.tree_l2_norm(server_state.grad_glob)
             delta_params_norm = tree_util.tree_l2_norm(delta_params)
             hypergrad_glob = jnp.where((grad_glob_norm > 0. and delta_params_norm > 0.),
                 hypergrad_glob / grad_glob_norm / delta_params_norm,
-                0)
+                0
+            )
         hypergrad = - jnp.array([
             hypergrad_glob + hypergrad_local,   # tau
             hypergrad_glob,                     # eta_c
             -hypergrad_local,                   # bs
-        ]) * jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.sigmoid_ub) \
-            * (1. - jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.sigmoid_ub))    # grad(sigmoid)
+        ]) 
+        if fathom_params is None or 'HPL' in fathom_params.update_type or 'HPM' in fathom_params.update_type:
+            hypergrad = hypergrad * jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.hparam_ub) \
+                * (1. - jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.hparam_ub))    # grad(sigmoid)
         # This is where individual learning rates are applied, assuming opt is SGD.
         # With any other opt, individual learning rates need to be set at opt instantiation.
         hypergrad = hypergrad * jnp.where(server_state.hyper_state.phase == 1, 
@@ -423,21 +428,20 @@ def federated_averaging(
 
         if fathom_params is None or 'HPL' in fathom_params.update_type:
             opt_state, opt_param = hyper_optimizer.apply(hypergrad, opt_state, opt_param)
-            hparams_vals = jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.sigmoid_ub) \
-                * server_state.hyper_state.hyperparams.sigmoid_ub
+            hparams_vals = jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.hparam_ub) \
+                * server_state.hyper_state.hyperparams.hparam_ub
         elif 'HPM' in fathom_params.update_type:
-            hparams_vals = jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.sigmoid_ub) \
-                * server_state.hyper_state.hyperparams.sigmoid_ub
+            hparams_vals = jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.hparam_ub) \
+                * server_state.hyper_state.hyperparams.hparam_ub
             hypergrad = hypergrad * hparams_vals
             opt_state, opt_param = hyper_optimizer.apply(hypergrad, opt_state, opt_param)
-            hparams_vals = jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.sigmoid_ub) \
-                * server_state.hyper_state.hyperparams.sigmoid_ub
+            hparams_vals = jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.hparam_ub) \
+                * server_state.hyper_state.hyperparams.hparam_ub
         elif 'EGU' in fathom_params.update_type or 'EGN' in fathom_params.update_type:
             # EGN gradients are already normalized
             opt_state, opt_param = hyper_optimizer.apply(hypergrad, opt_state, opt_param)
-            opt_param_linear = jnp.exp(opt_param) # Convert back to linear from log 
-            hparams_vals = jax.nn.sigmoid(opt_param_linear / server_state.hyper_state.hyperparams.sigmoid_ub) \
-                * server_state.hyper_state.hyperparams.sigmoid_ub
+            hparams_vals = jnp.exp(opt_param) # Convert back to linear from log scale
+            hparams_vals = jnp.clip(hparams_vals, a_max = server_state.hyper_state.hyperparams.hparam_ub)
 
         phase = jnp.where(server_state.hyper_state.phase == 1,
             jnp.where(hparams_vals[0] > 0.5, 1, 2),
@@ -465,7 +469,7 @@ def federated_averaging(
             bs = bs,
             eta_h = server_state.hyper_state.hyperparams.eta_h,
             alpha = server_state.hyper_state.hyperparams.alpha, 
-            sigmoid_ub = server_state.hyper_state.hyperparams.sigmoid_ub, 
+            hparam_ub = server_state.hyper_state.hyperparams.hparam_ub, 
         )
         hyper_state = HyperState(
             hyperparams = hyperparams,
