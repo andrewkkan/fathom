@@ -204,7 +204,6 @@ class HyperState:
     init_hparams: HyperParams
     opt_state: optimizers.OptState
     opt_param: jnp.ndarray
-    phase: int # TBD
     hypergrad_glob: float
     hypergrad_local: float
 
@@ -278,7 +277,6 @@ def federated_averaging(
             init_hparams = init_hparams,
             opt_state = opt_state_hyper,
             opt_param = opt_param_hyper,
-            phase = 1,
             hypergrad_glob = 0.,
             hypergrad_local = 0.,
         )
@@ -305,12 +303,12 @@ def federated_averaging(
     ) -> Tuple[ServerState, Mapping[federated_data.ClientId, Any]]:
         client_num_examples = {cid: len(cds) for cid, cds, _ in clients}
         tau: float = server_state.hyper_state.hyperparams.tau
-        bs: int = int(server_state.hyper_state.hyperparams.bs + 0.5)
+        bs: int = max(int(server_state.hyper_state.hyperparams.bs + 0.5), 1)
         eta_c: float = server_state.hyper_state.hyperparams.eta_c
         batch_clients = [(cid, cds.shuffle_repeat_batch(
             client_datasets.ShuffleRepeatBatchHParams(
-                batch_size = bs if server_state.hyper_state.phase == 1 else client_num_examples[cid], 
-                num_steps = int(jnp.ceil(tau * client_num_examples[cid] / bs)) if server_state.hyper_state.phase == 1 else 1, 
+                batch_size = bs, 
+                num_steps = max(int(jnp.ceil(tau * client_num_examples[cid] / bs)), 1),
                 num_epochs = None, # This is required.  See ShuffleRepeatBatchView implementation in fedjax.core.client_datasets.py.
                 drop_remainder = client_batch_hparams.drop_remainder,
                 seed = client_batch_hparams.seed,
@@ -420,10 +418,7 @@ def federated_averaging(
                 * (1. - jax.nn.sigmoid(opt_param / server_state.hyper_state.hyperparams.hparam_ub))    # grad(sigmoid)
         # This is where individual learning rates are applied, assuming opt is SGD.
         # With any other opt, individual learning rates need to be set at opt instantiation.
-        hypergrad = hypergrad * jnp.where(server_state.hyper_state.phase == 1, 
-            server_state.hyper_state.hyperparams.eta_h, # This is an array of 3 eta_h's
-            jnp.zeros_like(server_state.hyper_state.hyperparams.eta_h)
-        )
+        hypergrad = hypergrad * server_state.hyper_state.hyperparams.eta_h
         opt_state, opt_param = hyper_optimizer.apply(hypergrad, opt_state, opt_param)
 
         if fathom_params is None or 'HPL' in fathom_params.update_type:
@@ -443,26 +438,7 @@ def federated_averaging(
             hparams_vals = jnp.exp(opt_param) # Convert back to linear from log scale
             hparams_vals = jnp.clip(hparams_vals, a_max = server_state.hyper_state.hyperparams.hparam_ub)
 
-        phase = jnp.where(server_state.hyper_state.phase == 1,
-            jnp.where(hparams_vals[0] > 0.5, 1, 2),
-            2 
-        )
-        # Beware that hypergrads become really noisy or nonexistent during phase 2, so we may want to reduce reliance on them.
-        tau = jnp.where(phase == 1, # if
-            hparams_vals[0],
-            0.0 # Else
-        )
-        eta_c = jnp.where(phase == 1, # if
-            hparams_vals[1],
-            jnp.where(server_state.hyper_state.phase == 1, # else-if
-                server_state.hyper_state.hyperparams.eta_c * 0.5 / 0.25, # Transition value for eta_c
-                server_state.hyper_state.hyperparams.eta_c * server_state.round_index / (server_state.round_index + 1)          
-            )
-        )
-        bs = jnp.where(phase == 1,
-            hparams_vals[2],
-            server_state.hyper_state.hyperparams.bs * (server_state.round_index + 1) / server_state.round_index 
-        )
+        tau, eta_c, bs = hparams_vals[0], hparams_vals[1], hparams_vals[2]
         hyperparams = HyperParams(
             tau = tau,
             eta_c = eta_c,
@@ -476,7 +452,6 @@ def federated_averaging(
             init_hparams = server_state.hyper_state.init_hparams,
             opt_state = opt_state,
             opt_param = opt_param,
-            phase = phase,
             hypergrad_glob = hypergrad_glob,
             hypergrad_local = hypergrad_local,
         )        
