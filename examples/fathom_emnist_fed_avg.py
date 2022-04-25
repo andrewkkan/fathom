@@ -44,18 +44,20 @@ FLAGS = flags.FLAGS
 
 flags.DEFINE_integer(
     'sim_rounds', 1501, 'Total number of rounds for sim run.')
+flags.DEFINE_integer(
+    'random_seed', 17, 'Random seed.')
 
 flags.DEFINE_float(
     'alpha', 0.5, 'Momentum for global grad estimation.')
 
 flags.DEFINE_float(
-    'eta_h', 1.0, 'Init Hyper Learning Rate for all')
+    'eta_h', 0.01, 'Init Hyper Learning Rate for all')
 flags.DEFINE_float(
-    'eta_h0', 10.0, 'Init Hyper Learning Rate for tau')
+    'eta_h0', 1.0, 'Init Hyper Learning Rate for tau')
 flags.DEFINE_float(
-    'eta_h1', 0.1, 'Init Hyper Learning Rate for eta_c')
+    'eta_h1', 1.0, 'Init Hyper Learning Rate for eta_c')
 flags.DEFINE_float(
-    'eta_h2', 20.0, 'Init Hyper Learning Rate for bs')
+    'eta_h2', 0.0, 'Init Hyper Learning Rate for bs')
 
 flags.DEFINE_float(
     'tau_ub', 10.0, 'Upperbound value for tau')
@@ -69,7 +71,7 @@ flags.DEFINE_float(
 flags.DEFINE_float(
     'eta_c', 10**(-1.5), 'Init Client Learning Rate')
 flags.DEFINE_integer(
-    'batch_size', 1, 'Init Local Batch Size')
+    'batch_size', 5, 'Init Local Batch Size')
 
 flags.DEFINE_string(
     'model', 'CNN', 'CNN or MLP or AE')
@@ -77,8 +79,8 @@ flags.DEFINE_string(
 flags.DEFINE_integer(
     'clients_per_round', 10, 'Number of clients participating in federated learning in each round.')
 
-flags.DEFINE_boolean(
-    'use_autolip', True, 'Use AutoLip to detect fault in global model.  False means no fault detection.')
+flags.DEFINE_integer(
+    'use_autolip', 0, 'Use AutoLip to detect fault in global model.  False means no fault detection.')
 flags.DEFINE_float(
     'autolip_lambda', 0.0, 'Regularization factor for AutoLip.')
 
@@ -88,7 +90,7 @@ flags.DEFINE_float(
 # EGU = Exponentiated Gradient Unnormalized
 # EGN = Exponentiated Gradient Normalized
 flags.DEFINE_string(
-    'hyper_update', 'HPL', 'HPL, HPM, EGU, or EGN')
+    'hyper_update', 'EGN', 'HPL, HPM, EGU, or EGN')
 flags.register_validator('hyper_update',
                          lambda value: 'HPL' in value or 'HPM' in value or 'EGU' in value or 'EGN' in value,
                          message='--hyper_update must be HPL, HPM, EGU, or EGN')
@@ -111,6 +113,7 @@ def main(_):
     print(f"    --use_autolip {FLAGS.use_autolip}")
     print(f"    --autolip_lambda {FLAGS.autolip_lambda}")
     print(f"    --hyper_update {FLAGS.hyper_update}")
+    print(f"    --random_seed {FLAGS.random_seed}")
     # We only use TensorFlow for datasets, so we restrict it to CPU only to avoid
     # issues with certain ops not being available on GPU/TPU.
     # It does not affect operations other than datasets.
@@ -151,7 +154,7 @@ def main(_):
     # Hyperparameters for client local traing dataset preparation.
     client_batch_hparams = fedjax.ShuffleRepeatBatchHParams(
         batch_size = FLAGS.batch_size, # Ideally this is adaptive and not necessary but batch_size is required.
-        seed = jax.random.PRNGKey(17),
+        seed = jax.random.PRNGKey(FLAGS.random_seed),
     )
     server_init_hparams: HyperParams = HyperParams(
         eta_c = float(FLAGS.eta_c),
@@ -162,7 +165,7 @@ def main(_):
         hparam_ub = jnp.array([FLAGS.tau_ub, FLAGS.eta_c_ub, FLAGS.bs_ub]),
     )
     autolip_params: AutoLipParams = AutoLipParams(
-        use = FLAGS.use_autolip,
+        use = True if FLAGS.use_autolip == 1 else False,
         lamb = FLAGS.autolip_lambda,
     )
     fathom_params: FathomParams = FathomParams(
@@ -183,12 +186,12 @@ def main(_):
     )
 
     # Initialize model parameters and algorithm server state.
-    init_params = model.init(jax.random.PRNGKey(17))
+    init_params = model.init(jax.random.PRNGKey(FLAGS.random_seed))
     server_state = algorithm.init(init_params)
 
     # Train and eval loop.
     train_client_sampler = fedjax.client_samplers.UniformGetClientSampler(
-            fd=train_fd, num_clients=FLAGS.clients_per_round, seed=0)
+            fd=train_fd, num_clients=FLAGS.clients_per_round, seed=FLAGS.random_seed+1)
     for round_num in range(1, FLAGS.sim_rounds):
         # Sample 10 clients per round without replacement for training.
         clients = train_client_sampler.sample()
