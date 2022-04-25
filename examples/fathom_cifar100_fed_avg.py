@@ -71,7 +71,7 @@ flags.DEFINE_float(
 flags.DEFINE_float(
     'eta_c', 10**(-1.5), 'Init Client Learning Rate')
 flags.DEFINE_integer(
-    'batch_size', 5, 'Init Local Batch Size')
+    'batch_size', 10, 'Init Local Batch Size')
 
 flags.DEFINE_integer(
     'clients_per_round', 10, 'Number of clients participating in federated learning in each round.')

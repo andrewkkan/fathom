@@ -69,7 +69,7 @@ flags.DEFINE_float(
 flags.DEFINE_float(
     'eta_c', 10**(-1), 'Init Client Learning Rate')
 flags.DEFINE_integer(
-    'batch_size', 1, 'Init Local Batch Size')
+    'batch_size', 8, 'Init Local Batch Size')
 flags.DEFINE_float(
     'tau', 1.0, 'Init Num Epochs')
 
