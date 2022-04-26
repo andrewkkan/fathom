@@ -200,9 +200,15 @@ def main(_):
         if round_num % 1 == 0:
             # Periodically evaluate the trained server model parameters.
             # Read and combine clients' train and test datasets for evaluation.
+            train_client_ids = [cid for cid, _, _ in clients]
             test_clients = test_client_sampler.sample()
             test_client_ids = [cid for cid, _, _ in test_clients]
 
+            train_eval_datasets = [cds for _, cds in test_fd.get_clients(train_client_ids)]
+            train_eval_batches = fedjax.padded_batch_client_datasets(
+                train_eval_datasets, 
+                batch_size = 256,
+            )
             test_eval_datasets = [cds for _, cds in test_fd.get_clients(test_client_ids)]
             test_eval_batches = fedjax.padded_batch_client_datasets(
                 test_eval_datasets, 
@@ -210,11 +216,17 @@ def main(_):
             )
 
             # Run evaluation metrics defined in `model.eval_metrics`.
+            train_metrics = fedjax.evaluate_model(
+                model, 
+                server_state.params,
+                train_eval_batches
+            )
             test_metrics = fedjax.evaluate_model(
                 model, 
                 server_state.params,
                 test_eval_batches
             )
+            print(f'[round {round_num}] train_metrics={train_metrics}')
             print(f'[round {round_num}] eta_c={server_state.hyper_state.hyperparams.eta_c}, tau={server_state.hyper_state.hyperparams.tau}, bs={server_state.hyper_state.hyperparams.bs}')
             print(f'[round {round_num}] hypergrad_glob={server_state.hyper_state.hypergrad_glob}, hypergrad_local={server_state.hyper_state.hypergrad_local}')
             print(f'[round {round_num}] test_metrics={test_metrics}')
