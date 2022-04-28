@@ -72,6 +72,8 @@ flags.DEFINE_float(
     'eta_c', 10**(-1.5), 'Init Client Learning Rate')
 flags.DEFINE_integer(
     'batch_size', 20, 'Init Local Batch Size')
+flags.DEFINE_float(
+    'eta_s', 10**(0.5), 'Fixed Server Learning Rate')
 
 flags.DEFINE_integer(
     'clients_per_round', 10, 'Number of clients participating in federated learning in each round.')
@@ -104,6 +106,7 @@ def main(_):
     print(f"    --bs_ub {FLAGS.bs_ub}")
     print(f"    --tau {FLAGS.tau}")
     print(f"    --eta_c {FLAGS.eta_c}")
+    print(f"    --eta_s {FLAGS.eta_s}")
     print(f"    --batch_size {FLAGS.batch_size}")
     print(f"    --clients_per_round {FLAGS.clients_per_round}")
     print(f"    --use_autolip {FLAGS.use_autolip}")
@@ -136,7 +139,7 @@ def main(_):
     client_optimizer = fathom.optimizers.sgd(learning_rate = FLAGS.eta_c)
     # server_optimizer = fedjax.optimizers.adam(
     #          learning_rate=10**(-1.5), b1=0.9, b2=0.999, eps=10**(-4))
-    server_optimizer = fedjax.optimizers.sgd(learning_rate = 1.0) # Fed Avg
+    server_optimizer = fedjax.optimizers.sgd(learning_rate = FLAGS.eta_s) # Fed Avg
     hyper_optimizer = fedjax.optimizers.sgd(learning_rate = FLAGS.eta_h) # Individual learning rates are set separately.  SGD is required.
     # Hyperparameters for client local traing dataset preparation.
     client_batch_hparams = fedjax.ShuffleRepeatBatchHParams(

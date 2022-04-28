@@ -126,11 +126,11 @@ def main(_):
         if round_num % 1 == 0:
             # Periodically evaluate the trained server model parameters.
             # Read and combine clients' train and test datasets for evaluation.
-            train_client_ids = [cid for cid, _, _ in clients]
+            train_client_ids = [cid for cid, _, _ in train_clients]
             test_clients = test_client_sampler.sample()
             test_client_ids = [cid for cid, _, _ in test_clients]
 
-            train_eval_datasets = [cds for _, cds in test_fd.get_clients(train_client_ids)]
+            train_eval_datasets = [cds for _, cds in train_fd.get_clients(train_client_ids)]
             train_eval_batches = fedjax.padded_batch_client_datasets(
                 train_eval_datasets, 
                 batch_size = 256,

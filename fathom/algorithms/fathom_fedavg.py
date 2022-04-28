@@ -229,10 +229,10 @@ def estimate_grad_glob(server_state: ServerState, mean_delta_params: Params) -> 
     grad_glob = tree_util.tree_weight(server_state.grad_glob, server_state.hyper_state.hyperparams.alpha)
     delta_params = tree_util.tree_weight(mean_delta_params, 1. - server_state.hyper_state.hyperparams.alpha)
     grad_glob = tree_util.tree_add(grad_glob, delta_params)
-    grad_glob = fathom.core.tree_util.tree_inverse_weight(
-        grad_glob, 
-        (1. - server_state.hyper_state.hyperparams.alpha ** server_state.round_index)
-    )
+    # grad_glob = fathom.core.tree_util.tree_inverse_weight(
+    #     grad_glob, 
+    #     (1. - server_state.hyper_state.hyperparams.alpha ** server_state.round_index)
+    # )
     return grad_glob
 
 
@@ -419,7 +419,6 @@ def federated_averaging(
         # This is where individual learning rates are applied, assuming opt is SGD.
         # With any other opt, individual learning rates need to be set at opt instantiation.
         hypergrad = hypergrad * server_state.hyper_state.hyperparams.eta_h
-        opt_state, opt_param = hyper_optimizer.apply(hypergrad, opt_state, opt_param)
 
         if fathom_params is None or 'HPL' in fathom_params.update_type:
             opt_state, opt_param = hyper_optimizer.apply(hypergrad, opt_state, opt_param)
