@@ -1,5 +1,0 @@
-    --tau=1.0
-    --eta_c=0.31622776601683794
-    --batch_size=16
-    --clients_per_round=50
-    --sim_rounds=1501
