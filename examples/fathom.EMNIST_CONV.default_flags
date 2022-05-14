@@ -6,7 +6,7 @@
     --eta_h2=10.0
     --tau_ub=10.0
     --eta_c_ub=0.5
-    --bs_ub=128.0
+    --bs_ub=512.0
     --tau=1.0
     --eta_c=0.1
     --batch_size=20
