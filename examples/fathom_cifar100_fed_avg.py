@@ -120,9 +120,9 @@ def main(_):
 
     # Load train and test federated data for EMNIST.
     # train_fd, test_fd = fathom.datasets.cifar100.load_data() # train_fd.num_clients() returns 500, test_fc.num_clients() returns 100
-    train, test = fedjax.datasets.cifar100.load_data()
-    train = train.preprocess_batch(fedjax.datasets.cifar100.preprocess_batch_tff)
-    test = test.preprocess_batch(fedjax.datasets.cifar100.preprocess_batch_tff)
+    train_fd, test_fd = fathom.datasets.cifar100.load_data()
+    train_fd = train_fd.preprocess_batch(fedjax.datasets.cifar100.preprocess_batch_tff)
+    test_fd = test_fd.preprocess_batch(fedjax.datasets.cifar100.preprocess_batch_tff)
 
     model: models.Model = fathom.models.cifar100.create_resnet18_model()
 
