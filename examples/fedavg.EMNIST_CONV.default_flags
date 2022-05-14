@@ -1,0 +1,7 @@
+    --sim_rounds=4000
+    --tau=1.0
+    --eta_c=0.1
+    --batch_size=20
+    --clients_per_round=10
+    --random_seed=1
+
