@@ -23,7 +23,7 @@ from fathom.models import resnets_gn # ResNets with GroupNorm vice BatchNorm
 # Defines the expected structure of input batches to the model. This is used to
 # determine the model parameter shapes.
 _HAIKU_SAMPLE_BATCH = {
-    'x': np.zeros((1, 32, 32, 3), dtype=np.float32),
+    'x': np.zeros((1, 24, 24, 3), dtype=np.float32),
     'y': np.zeros(1, dtype=np.int32)
 }
 _TRAIN_LOSS_CLASSIFIER = lambda b, p: metrics.unreduced_cross_entropy_loss(b['y'], p)

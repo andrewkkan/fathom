@@ -303,11 +303,11 @@ def federated_averaging(
     ) -> Tuple[ServerState, Mapping[federated_data.ClientId, Any]]:
         client_num_examples = {cid: len(cds) for cid, cds, _ in clients}
         tau: float = server_state.hyper_state.hyperparams.tau
-        bs: int = max(int(server_state.hyper_state.hyperparams.bs + 0.5), 1)
+        bs: int = max(int(server_state.hyper_state.hyperparams.bs + 0.5), 1) if server_state.hyper_state.hyperparams.bs > 0 else -1
         eta_c: float = server_state.hyper_state.hyperparams.eta_c
         batch_clients = [(cid, cds.shuffle_repeat_batch(
             client_datasets.ShuffleRepeatBatchHParams(
-                batch_size = bs, 
+                batch_size = bs if bs > 0 else len(cds), 
                 num_steps = max(int(jnp.ceil(tau * client_num_examples[cid] / bs)), 1),
                 num_epochs = None, # This is required.  See ShuffleRepeatBatchView implementation in fedjax.core.client_datasets.py.
                 drop_remainder = client_batch_hparams.drop_remainder,
