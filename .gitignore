@@ -22,7 +22,7 @@ jax.iml
 build/
 .git*
 *.log
-run*
+runlog*
 .cache
 tmp
 conf_paper
