@@ -1,4 +1,4 @@
-# Copyright 2021 Google LLC
+# Copyright 2022 FATHOM Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,7 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Utilities for working with tree-like container data structures.
+"""Addendum to fedjax.core.tree_util
+
+Utilities for working with tree-like container data structures.
 
 In JAX, the term pytree refers to a tree-like structure built out of
 container-like Python objects.

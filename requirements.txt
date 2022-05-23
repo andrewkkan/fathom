@@ -1,2 +1,2 @@
-flax
-tensorflow-cpu
+fedjax
+

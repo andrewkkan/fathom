@@ -1,4 +1,4 @@
-# Copyright 2021 Google LLC
+# Copyright 2022 FATHOM Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,7 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Structured flags commonly used in experiment binaries.
+"""Addendum to fedjax.training.structured_flags.
+
+Structured flags commonly used in experiment binaries.
 
 Structured flags are often used to construct complex structures via multiple
 simple flags (e.g. an optimizer can be created by controlling learning rate and
@@ -19,7 +21,7 @@ other hyper parameters).
 """
 
 import sys
-from typing import Optional, Sequence, Tuple
+from typing import Optional, Tuple
 
 from absl import flags
 import jax

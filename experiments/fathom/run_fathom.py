@@ -1,4 +1,4 @@
-# Copyright 2021 Google LLC
+# Copyright 2022 FATHOM Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,12 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Top level experiment script for fed_avg.
+"""Top level experiment script for fathom_fedavg.
 
-Preset hyperparameters can be loaded via -flagfile, e.g.
+Preset flags can be loaded via -flagfile, e.g.
 
-python3 run_fed_avg.py -flagfile=fed_avg.EMNIST_CONV.flags -root_dir=/tmp/fed_avg
+python3 experiments/fathom/run_fathom.py -flagfile=experiments/fathom/fathom.EMNIST_CONV.flags -root_dir=./tmp/fathom
 """
+
 import sys
 sys.path.append('./')
 
