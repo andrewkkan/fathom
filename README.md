@@ -7,7 +7,7 @@
 
 ## What is FATHOM?
 
-FATHOM is Federated AuTomatic Hyperparameter OptiMization, which is an online algorithm that operates as a one-shot procedure for [Federated Learning].  Its focus is specifically on hyperparameter optimization of: 1) client learning rate, 2) number of local steps, as well as 3) batch size, for [Federated Avgeraging].  
+FATHOM is Federated AuTomatic Hyperparameter OptiMization, which is an online algorithm that operates as a one-shot procedure for [Federated Learning].  Its focus is specifically on hyperparameter optimization of: 1) client learning rate, 2) number of local steps, as well as 3) batch size, for [Federated Averaging].  
 
 ## Quickstart
 
