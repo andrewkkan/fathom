@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Addendum to fedjax.training.structured_flags.
+"""Extension to fedjax.training.structured_flags.
 
 Structured flags commonly used in experiment binaries.
 
@@ -72,7 +72,14 @@ class OptimizerFlags(fedjax.training.structured_flags.OptimizerFlags):
                 f'--{self._prefix}optimizer.')
 
 class ShuffleRepeatBatchHParamsFlags(NamedFlags):
-    """Constructs ShuffleRepeatBatchHParams from flags."""
+    """Constructs ShuffleRepeatBatchHParams from flags.
+       Replaces identically named class from FedJAX for FATHOM.  This class exists
+       more for semantics, as opposed to using the FedJAX version which requires
+       num_epochs and num_steps from FLAGS, both of which are not required for FATHOM.
+       Using the FedJAX version still works because num_epochs and num_steps are 
+       dynamically set explicitly within the FATHOM algorithm so it does not matter 
+       in terms of its operations. 
+    """
 
     def __init__(self, name: Optional[str] = None, default_batch_size: int = 128, default_batch_seed: int = 123):
         super().__init__(name)

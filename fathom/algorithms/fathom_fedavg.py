@@ -123,10 +123,6 @@ def estimate_grad_glob(server_state: ServerState, mean_delta_params: Params) -> 
     grad_glob = tree_util.tree_weight(server_state.grad_glob, server_state.hyper_state.hyperparams.alpha)
     delta_params = tree_util.tree_weight(mean_delta_params, 1. - server_state.hyper_state.hyperparams.alpha)
     grad_glob = tree_util.tree_add(grad_glob, delta_params)
-    # grad_glob = fathom.core.tree_util.tree_inverse_weight(
-    #     grad_glob, 
-    #     (1. - server_state.hyper_state.hyperparams.alpha ** server_state.round_index)
-    # )
     return grad_glob
 
 
@@ -164,7 +160,7 @@ def federated_averaging(
             hypergrad_glob = 0.,
             hypergrad_local = 0.,
         )
-        # Need to initialize round_index to 1 for bias comp
+        # Need to initialize round_index to 1 for any possible bias comp
         return ServerState(
             params = params, 
             params_bak = params,
@@ -202,8 +198,7 @@ def federated_averaging(
         shared_input = {'params': server_state.params, 'eta_c': eta_c, 'Ep': Ep, 'bs': bs}
         client_diagnostics = {}
         # Running weighted mean of client updates. We do this iteratively to avoid
-        # loading all the client outputs into memory since they can be prohibitively
-        # large depending on the model parameters size.
+        # loading all the client outputs into memory.
         delta_params_sum = tree_util.tree_zeros_like(server_state.params)
         hypergrad_local_sum = jnp.array(0.0)
         num_examples_sum = 0.

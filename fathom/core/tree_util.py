@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Addendum to fedjax.core.tree_util
+"""Extension to fedjax.core.tree_util
 
 Utilities for working with tree-like container data structures.
 
@@ -27,7 +27,6 @@ from fedjax.core.tree_util import tree_weight
 
 import jax
 import jax.numpy as jnp
-
 
 
 @jax.jit
