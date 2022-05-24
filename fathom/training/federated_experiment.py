@@ -23,16 +23,16 @@ from fedjax.core import federated_algorithm
 from fathom.algorithms.fathom_fedavg import ServerState, HyperState, HyperParams
 
 class FathomHyperParamsStatusFn(EvaluationFn):
-	"""Simple class that checks on HyperParams online adaptation status 
-	"""
-	def __call__(self, 
-		state: federated_algorithm.ServerState, round_num: int,
-	) -> Mapping[str, jnp.ndarray]:
-		serverstate: ServerState = state
-		return {
-			'Client learning rate': serverstate.hyper_state.hyperparams.eta_c,
-			'Epochs': serverstate.hyper_state.hyperparams.Ep,
-			'Batch size': serverstate.hyper_state.hyperparams.bs,
-			'Hypergrad global normalized (H_bar)': serverstate.hyper_state.hypergrad_glob,
-			'Hypergrad local normalized (G_bar)': serverstate.hyper_state.hypergrad_local,
-		}
+    """Simple class that checks on HyperParams online adaptation status 
+    """
+    def __call__(self, 
+        state: federated_algorithm.ServerState, round_num: int,
+    ) -> Mapping[str, jnp.ndarray]:
+        serverstate: ServerState = state
+        return {
+            'Client learning rate': serverstate.hyper_state.hyperparams.eta_c,
+            'Epochs': serverstate.hyper_state.hyperparams.Ep,
+            'Batch size': serverstate.hyper_state.hyperparams.bs,
+            'Hypergrad global normalized (H_bar)': serverstate.hyper_state.hypergrad_glob,
+            'Hypergrad local normalized (G_bar)': serverstate.hyper_state.hypergrad_local,
+        }
