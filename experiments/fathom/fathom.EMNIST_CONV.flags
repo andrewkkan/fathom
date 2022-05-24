@@ -1,5 +1,5 @@
 -task=EMNIST_CONV
--num_rounds=1501
+-num_rounds=1500
 -num_clients_per_round=10
 -eval_frequency=5
 -server_optimizer=sgd

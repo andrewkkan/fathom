@@ -101,16 +101,17 @@ def main(argv: Sequence[str]) -> None:
     eval_batch_hparams = eval_batch_flags.get()
     periodic_eval_fn_map = {
             'fed_train_eval':
-                    fedjax.training.ModelTrainClientsEvaluationFn(model, eval_batch_hparams),
+                fedjax.training.ModelTrainClientsEvaluationFn(model, eval_batch_hparams),
             'fed_test_eval':
-                    fedjax.training.ModelSampleClientsEvaluationFn(
-                            fedjax.client_samplers.UniformGetClientSampler(
-                                    fd=test_fd,
-                                    num_clients=FLAGS.num_clients_per_round,
-                                    seed=FLAGS.test_sampler_seed
-                            ), 
-                            model, eval_batch_hparams,
-                    )
+                fedjax.training.ModelSampleClientsEvaluationFn(
+                    fedjax.client_samplers.UniformGetClientSampler(
+                        fd=test_fd,
+                        num_clients=FLAGS.num_clients_per_round,
+                        seed=FLAGS.test_sampler_seed
+                    ), 
+                    model, eval_batch_hparams,
+                ),
+            'fed_hyperparam_status': fathom.training.FathomHyperParamsStatusFn(),
     }
     final_eval_fn_map = {
             'full_test_eval':

@@ -1,6 +1,6 @@
 -task=STACKOVERFLOW_WORD
 -num_clients_per_round=50
--num_rounds=1501
+-num_rounds=1500
 -eval_frequency=5
 -server_optimizer=sgd
 -server_learning_rate=1.0

@@ -13,3 +13,4 @@
 # limitations under the License.
 
 from fathom.training import structured_flags
+from fathom.training.federated_experiment import FathomHyperParamsStatusFn
