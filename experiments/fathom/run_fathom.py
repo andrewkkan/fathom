@@ -71,12 +71,14 @@ flags.DEFINE_integer('num_clients_per_round', 10,
 flags.DEFINE_string('logfile', '', 'Path and name of logfile.')
 
 def main(argv: Sequence[str]) -> None:
+    
     if FLAGS.sim_seed > 0:
         FLAGS.params_seed = FLAGS.sim_seed + 1
         FLAGS.train_sampler_seed = FLAGS.params_seed + 1
         FLAGS.test_sampler_seed = FLAGS.train_sampler_seed + 1
         FLAGS.client_batch_seed = FLAGS.test_sampler_seed + 1
-
+    if FLAGS.cache_dir is None:
+        FLAGS.cache_dir = "./.cache/fathom/"
     if FLAGS.logfile:
         logdir, logfn = os.path.split(FLAGS.logfile)
         logging.use_absl_handler()
