@@ -1,0 +1,2 @@
+-flagfile=./experiments/fathom/fathom.EMNIST_CONV.flags 
+-fathom_initial_batch_size=8

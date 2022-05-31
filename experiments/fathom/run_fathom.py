@@ -23,8 +23,8 @@ sys.path.append('./')
 
 from typing import Sequence
 
-from absl import app
-from absl import flags
+from absl import app, flags, logging
+import os
 
 import fedjax
 import jax
@@ -47,6 +47,8 @@ eval_batch_flags = fedjax.training.structured_flags.PaddedBatchHParamsFlags(
         'eval')
 
 # Random seeds.
+flags.DEFINE_integer('sim_seed', 0,
+                                         'Seed for entire sim.  0 or less means other seeds need to be set manually.')
 flags.DEFINE_integer('params_seed', 1,
                                          'Seed for initializing model parameters.')
 flags.DEFINE_integer('train_sampler_seed', 2,
@@ -63,13 +65,24 @@ client_optimizer_flags = fathom.training.structured_flags.OptimizerFlags(
         'client')
 fathom_flags = fathom.training.structured_flags.FathomFlags(
         'fathom')
-client_training_batch_flags = fathom.training.structured_flags.ShuffleRepeatBatchHParamsFlags(
-                'client_training', default_batch_seed = 123)
 flags.DEFINE_integer('num_clients_per_round', 10,
                                          'Number of participating clients in each training round.')
 
+flags.DEFINE_string('logfile', '', 'Path and name of logfile.')
 
 def main(argv: Sequence[str]) -> None:
+    if FLAGS.sim_seed > 0:
+        FLAGS.params_seed = FLAGS.sim_seed + 1
+        FLAGS.train_sampler_seed = FLAGS.params_seed + 1
+        FLAGS.test_sampler_seed = FLAGS.train_sampler_seed + 1
+        FLAGS.client_batch_seed = FLAGS.test_sampler_seed + 1
+
+    if FLAGS.logfile:
+        logdir, logfn = os.path.split(FLAGS.logfile)
+        logging.use_absl_handler()
+        logging.get_absl_handler().use_absl_log_file(logfn, logdir) 
+        logging.info(FLAGS.flag_values_dict())
+
     del argv
     if FLAGS.use_parallel:
         fedjax.set_for_each_client_backend('pmap')

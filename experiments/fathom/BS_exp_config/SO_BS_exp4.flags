@@ -1,0 +1,2 @@
+-flagfile=./experiments/fathom/fathom.STACKOVERFLOW_WORD.flags 
+-fathom_initial_batch_size=256

@@ -1,0 +1,2 @@
+-flagfile=./experiments/fathom/fathom.STACKOVERFLOW_WORD.flags 
+-fathom_initial_learning_rate=0.05
