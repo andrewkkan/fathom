@@ -46,8 +46,14 @@ source experiments/fathom/sim_launch.sh
 
 ## Citation
 ```
-
-
+@misc{kan2022federated,
+    title={Federated Hypergradient Descent},
+    author={Andrew K Kan},
+    year={2022},
+    eprint={2211.02106},
+    archivePrefix={arXiv},
+    primaryClass={cs.LG}
+}
 ```
 
 
