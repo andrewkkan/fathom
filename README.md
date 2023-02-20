@@ -1,8 +1,7 @@
 # FATHOM: Federated AuTomatic Hyperparameter OptiMization
 
 [**Documentation**](./documentation/fathom/index.html) |
-[**Full Paper**](./conf-paper/fathom.pdf) | [**Main Paper**](./conf-paper/fathom-paper.pdf) | 
-[**Supplementary To Paper**](./conf-paper/fathom-supp.pdf) 
+[**Link to Paper**](https://arxiv.org/abs/2107.13586) 
 
 
 ## What is FATHOM?
@@ -12,13 +11,17 @@ FATHOM is Federated AuTomatic Hyperparameter OptiMization, which is an online al
 
 ## Installation
 
-You will need a moderately recent version of Python. Please check
-[the PyPI page](https://pypi.org/project/fedjax/) for the up to date version
-requirement.
+You will need a moderately recent version of Python.  We recommend 3.7.
 
-First, install [JAX]. We highly recommend the GPU version.
+You will need to install [JAX]. We highly recommend the GPU version.  
 
-Then copy this folder to your local working directory, and follow the quickstart guide.
+Next, after copying this folder to your local working directory, install [FedJAX]:
+```
+pip install -r requirements.txt
+
+```
+
+Then follow the quickstart guide.
 
 ## Quickstart
 
@@ -41,14 +44,22 @@ For replicating simulation results from the paper:
 source experiments/fathom/sim_launch.sh
 ```
 
+## Citation
+```
+
+
+```
+
+
 ## Contributing
 
-If you'd like to contribute, or have any suggestions, you can contact us at FATHOM-AUTHORS@FATHOM-AUTHORS.org or open an issue on this GitHub repository.
+If you'd like to contribute, or have any suggestions, you can contact us at andrew.k.kan@gmail.com or open an issue on this GitHub repository.
 
 All contributions welcome! All content in this repository is licensed under the Apache License, Version 2.0. See [LICENSE] for the full license text.
 
 
 [JAX]: https://github.com/google/jax
+[FedJAX]: https://github.com/google/fedjax
 [Federated Learning]: https://ai.googleblog.com/2017/04/federated-learning-collaborative.html
 [Federated Averaging]: https://arxiv.org/abs/1602.05629
 [LICENSE]: LICENSE

@@ -1,2 +1,2 @@
-fedjax
+fedjax==0.0.10
 
