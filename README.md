@@ -1,7 +1,7 @@
 # FATHOM: Federated AuTomatic Hyperparameter OptiMization
 
 [**Documentation**](./documentation/fathom/index.html) |
-[**Link to Paper**](https://arxiv.org/abs/2107.13586) 
+[**Link to Paper**](https://arxiv.org/abs/2211.02106) 
 
 
 ## What is FATHOM?
